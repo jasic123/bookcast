@@ -1,0 +1,657 @@
+import { useState, useEffect } from 'react'
+import { useParams } from 'react-router-dom'
+import { booksApi, researchApi } from '../services/api'
+import type { Book, Research } from '../types'
+
+export default function ResearchPage() {
+  const { bookId } = useParams<{ bookId: string }>()
+  const [book, setBook] = useState<Book | null>(null)
+  const [researches, setResearches] = useState<Research[]>([])
+  const [currentResearch, setCurrentResearch] = useState<Research | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // Create research form
+  const [themes, setThemes] = useState<string>('')
+  const [matchMode, setMatchMode] = useState<'any' | 'all'>('any')
+  const [jobId, setJobId] = useState<string | null>(null)
+  const [jobStatus, setJobStatus] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (bookId) {
+      loadBook(parseInt(bookId))
+      loadResearches(parseInt(bookId))
+    }
+  }, [bookId])
+
+  // Poll job status if there's an active job
+  useEffect(() => {
+    if (!jobId) return
+
+    const interval = setInterval(async () => {
+      try {
+        const status = await researchApi.getJobStatus(jobId)
+        setJobStatus(status.status)
+
+        if (status.status === 'finished' || status.status === 'failed') {
+          clearInterval(interval)
+          if (bookId) {
+            loadResearches(parseInt(bookId))
+          }
+          setJobId(null)
+        }
+      } catch (err) {
+        console.error('Failed to get job status:', err)
+      }
+    }, 2000)
+
+    return () => clearInterval(interval)
+  }, [jobId, bookId])
+
+  const loadBook = async (id: number) => {
+    try {
+      const bookData = await booksApi.getBook(id)
+      setBook(bookData)
+    } catch (err) {
+      console.error('Failed to load book:', err)
+    }
+  }
+
+  const loadResearches = async (id: number) => {
+    try {
+      const researchData = await researchApi.getResearchForBook(id)
+      setResearches(researchData)
+      if (researchData.length > 0) {
+        setCurrentResearch(researchData[0])
+      }
+    } catch (err) {
+      console.error('Failed to load researches:', err)
+    }
+  }
+
+  const handleCreateResearch = async () => {
+    if (!bookId || !themes.trim()) {
+      setError('请输入至少一个主题')
+      return
+    }
+
+    setLoading(true)
+    setError(null)
+
+    try {
+      const themeList = themes.split(',').map((t) => t.trim()).filter(Boolean)
+      const result = await researchApi.createResearch({
+        book_id: parseInt(bookId),
+        themes: themeList,
+        match_mode: matchMode,
+      })
+
+      setJobId(result.job_id)
+      setJobStatus('queued')
+      setThemes('')
+    } catch (err: any) {
+      setError(err.response?.data?.detail || '创建研究任务失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'completed':
+        return 'text-green-600 bg-green-50'
+      case 'running':
+        return 'text-blue-600 bg-blue-50'
+      case 'failed':
+        return 'text-red-600 bg-red-50'
+      default:
+        return 'text-gray-600 bg-gray-50'
+    }
+  }
+
+  const getMatchStatusBadge = (status: string) => {
+    switch (status) {
+      case 'candidate':
+        return 'bg-green-100 text-green-800'
+      case 'pending':
+        return 'bg-yellow-100 text-yellow-800'
+      case 'no_evidence':
+        return 'bg-gray-100 text-gray-800'
+      default:
+        return 'bg-gray-100 text-gray-800'
+    }
+  }
+
+  const getSourceTypeBadge = (type: string) => {
+    const badges: Record<string, string> = {
+      professional_review: 'bg-purple-100 text-purple-800',
+      reader_review: 'bg-blue-100 text-blue-800',
+      publisher_description: 'bg-yellow-100 text-yellow-800',
+      author_interview: 'bg-green-100 text-green-800',
+      news_article: 'bg-indigo-100 text-indigo-800',
+      encyclopedia: 'bg-gray-100 text-gray-800',
+      other: 'bg-gray-100 text-gray-800',
+      irrelevant: 'bg-red-100 text-red-800',
+    }
+    return badges[type] || 'bg-gray-100 text-gray-800'
+  }
+
+  const getSourceTypeLabel = (type: string) => {
+    const labels: Record<string, string> = {
+      professional_review: '专业书评',
+      reader_review: '读者评论',
+      publisher_description: '出版社简介',
+      author_interview: '作者访谈',
+      news_article: '新闻报道',
+      encyclopedia: '百科信息',
+      other: '其他资料',
+      irrelevant: '无关内容',
+    }
+    return labels[type] || type
+  }
+
+  if (!book) {
+    return <div className="px-4 py-6">加载中...</div>
+  }
+
+  return (
+    <div className="px-4 py-6">
+      {/* Book Info */}
+      <div className="bg-white shadow rounded-lg p-6 mb-6">
+        <h1 className="text-2xl font-bold text-gray-900 mb-2">{book.title}</h1>
+        {book.author && (
+          <p className="text-gray-600 mb-2">作者：{book.author}</p>
+        )}
+        {book.description && (
+          <p className="text-gray-700 mt-3">{book.description}</p>
+        )}
+        <div className="flex space-x-4 mt-4 text-sm text-gray-500">
+          {book.isbn && <span>ISBN: {book.isbn}</span>}
+          {book.asin && <span>ASIN: {book.asin}</span>}
+          {book.rank && <span>排名: #{book.rank}</span>}
+        </div>
+      </div>
+
+      {/* Create Research */}
+      <div className="bg-white shadow rounded-lg p-6 mb-6">
+        <h2 className="text-lg font-semibold text-gray-900 mb-4">
+          创建新研究任务
+        </h2>
+
+        <div className="space-y-3">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              关注主题（用逗号分隔）*
+            </label>
+            <input
+              type="text"
+              value={themes}
+              onChange={(e) => setThemes(e.target.value)}
+              placeholder="例如：死亡, 轮回, 虚拟世界"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              disabled={loading || !!jobId}
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              匹配模式
+            </label>
+            <select
+              value={matchMode}
+              onChange={(e) => setMatchMode(e.target.value as 'any' | 'all')}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              disabled={loading || !!jobId}
+            >
+              <option value="any">任一主题匹配</option>
+              <option value="all">全部主题匹配</option>
+            </select>
+          </div>
+
+          <button
+            onClick={handleCreateResearch}
+            disabled={loading || !!jobId}
+            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-400"
+          >
+            {loading ? '创建中...' : jobId ? '任务运行中...' : '开始研究'}
+          </button>
+
+          {error && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+              {error}
+            </div>
+          )}
+
+          {jobId && (
+            <div className="p-3 bg-blue-50 border border-blue-200 rounded text-sm text-blue-700">
+              任务状态：{jobStatus || 'queued'} | Job ID: {jobId}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Research History */}
+      {researches.length > 0 && (
+        <div className="bg-white shadow rounded-lg p-6 mb-6">
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">
+            研究历史
+          </h2>
+          <div className="space-y-2">
+            {researches.map((research) => (
+              <div
+                key={research.id}
+                className={`p-3 rounded border cursor-pointer ${
+                  currentResearch?.id === research.id
+                    ? 'border-blue-500 bg-blue-50'
+                    : 'border-gray-200 hover:bg-gray-50'
+                }`}
+                onClick={() => setCurrentResearch(research)}
+              >
+                <div className="flex justify-between items-center">
+                  <div>
+                    <span className="font-medium">
+                      主题：{research.themes.join(', ')}
+                    </span>
+                    <span className="ml-3 text-sm text-gray-500">
+                      {new Date(research.created_at).toLocaleString('zh-CN')}
+                    </span>
+                  </div>
+                  <span
+                    className={`px-2 py-1 rounded text-xs font-medium ${getStatusColor(
+                      research.status
+                    )}`}
+                  >
+                    {research.status}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Research Results */}
+      {currentResearch && currentResearch.status === 'completed' && (
+        <>
+          {/* Overall Assessment */}
+          <div className="bg-white shadow rounded-lg p-6 mb-6">
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">
+              综合评估
+            </h2>
+            {currentResearch.overall_assessment && (
+              <div className="mb-4">
+                <span className="font-medium">结论：</span>
+                <span
+                  className={`ml-2 px-3 py-1 rounded text-sm font-medium ${
+                    currentResearch.overall_assessment === 'recommended'
+                      ? 'bg-green-100 text-green-800'
+                      : currentResearch.overall_assessment === 'insufficient'
+                      ? 'bg-yellow-100 text-yellow-800'
+                      : currentResearch.overall_assessment === 'needs_review'
+                      ? 'bg-orange-100 text-orange-800'
+                      : 'bg-gray-100 text-gray-800'
+                  }`}
+                >
+                  {currentResearch.overall_assessment === 'recommended'
+                    ? '建议继续研究'
+                    : currentResearch.overall_assessment === 'insufficient'
+                    ? '资料不足'
+                    : currentResearch.overall_assessment === 'needs_review'
+                    ? '待人工核实'
+                    : '未发现主题证据'}
+                </span>
+              </div>
+            )}
+            {currentResearch.assessment_reasoning && (
+              <p className="text-gray-700 mb-4">
+                {currentResearch.assessment_reasoning}
+              </p>
+            )}
+            {currentResearch.material_gaps &&
+              currentResearch.material_gaps.length > 0 && (
+                <div>
+                  <span className="font-medium">资料缺口：</span>
+                  <ul className="list-disc list-inside mt-2 space-y-1">
+                    {currentResearch.material_gaps.map((gap, idx) => (
+                      <li key={idx} className="text-gray-700">
+                        {gap}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+          </div>
+
+          {/* Theme Matches */}
+          {currentResearch.theme_matches &&
+            currentResearch.theme_matches.length > 0 && (
+              <div className="bg-white shadow rounded-lg p-6 mb-6">
+                <h2 className="text-lg font-semibold text-gray-900 mb-4">
+                  主题匹配结果
+                </h2>
+                <div className="space-y-4">
+                  {currentResearch.theme_matches.map((match) => (
+                    <div
+                      key={match.id}
+                      className="border border-gray-200 rounded-lg p-4"
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <h3 className="font-medium text-gray-900">
+                          主题：{match.theme}
+                        </h3>
+                        <span
+                          className={`px-2 py-1 rounded text-xs font-medium ${getMatchStatusBadge(
+                            match.status
+                          )}`}
+                        >
+                          {match.status === 'candidate'
+                            ? '候选匹配'
+                            : match.status === 'pending'
+                            ? '待核实'
+                            : '未发现证据'}
+                        </span>
+                      </div>
+                      <p className="text-gray-700 mb-3">{match.reasoning}</p>
+                      {match.evidence_quotes &&
+                        match.evidence_quotes.length > 0 && (
+                          <div className="bg-gray-50 rounded p-3">
+                            <span className="text-sm font-medium text-gray-700">
+                              证据引用：
+                            </span>
+                            <ul className="mt-2 space-y-1">
+                              {match.evidence_quotes.map((quote, idx) => (
+                                <li
+                                  key={idx}
+                                  className="text-sm text-gray-600 italic"
+                                >
+                                  "{quote}"
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+          {/* Sources */}
+          {currentResearch.sources && currentResearch.sources.length > 0 && (
+            <div className="bg-white shadow rounded-lg p-6 mb-6">
+              <h2 className="text-lg font-semibold text-gray-900 mb-4">
+                来源资料（{currentResearch.sources.length}）
+              </h2>
+              <div className="space-y-4">
+                {currentResearch.sources.map((source) => (
+                  <div
+                    key={source.id}
+                    className="border border-gray-200 rounded-lg p-4"
+                  >
+                    <div className="flex items-start justify-between mb-2">
+                      <h3 className="font-medium text-gray-900 flex-1">
+                        {source.title}
+                      </h3>
+                      <span
+                        className={`px-2 py-1 rounded text-xs font-medium whitespace-nowrap ml-2 ${getSourceTypeBadge(
+                          source.source_type
+                        )}`}
+                      >
+                        {getSourceTypeLabel(source.source_type)}
+                      </span>
+                    </div>
+
+                    <a
+                      href={source.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm text-blue-600 hover:underline break-all"
+                    >
+                      {source.url}
+                    </a>
+
+                    {source.summary && (
+                      <p className="text-sm text-gray-700 mt-3">
+                        {source.summary}
+                      </p>
+                    )}
+
+                    {source.key_points && source.key_points.length > 0 && (
+                      <div className="mt-3">
+                        <span className="text-sm font-medium text-gray-700">
+                          关键观点：
+                        </span>
+                        <ul className="mt-1 space-y-1">
+                          {source.key_points.map((point, idx) => (
+                            <li
+                              key={idx}
+                              className="text-sm text-gray-600 list-disc list-inside"
+                            >
+                              {point}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {source.source_classification_reasoning && (
+                      <p className="text-xs text-gray-500 mt-2">
+                        分类理由：{source.source_classification_reasoning}
+                      </p>
+                    )}
+
+                    <div className="flex items-center space-x-4 mt-3 text-xs text-gray-500">
+                      <span>
+                        状态：
+                        {source.fetch_status === 'fetched'
+                          ? '已获取'
+                          : source.fetch_status === 'failed'
+                          ? '获取失败'
+                          : source.fetch_status}
+                      </span>
+                      {source.relevance_score !== null && (
+                        <span>
+                          相关性：{(source.relevance_score * 100).toFixed(0)}%
+                        </span>
+                      )}
+                      {source.is_duplicate && (
+                        <span className="text-orange-600">重复内容</span>
+                      )}
+                      {!source.is_about_target_book && (
+                        <span className="text-red-600">非目标书籍</span>
+                      )}
+                    </div>
+
+                    {source.fetch_error && (
+                      <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded text-xs text-red-700">
+                        错误：{source.fetch_error}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Material Assessment */}
+          {currentResearch.material_assessment && (
+            <div className="bg-white shadow rounded-lg p-6">
+              <h2 className="text-lg font-semibold text-gray-900 mb-4">
+                资料充分度详情
+              </h2>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <span className="text-sm font-medium text-gray-700">
+                    书籍身份确认：
+                  </span>
+                  <span className="ml-2">
+                    {currentResearch.material_assessment
+                      .book_identity_confirmed
+                      ? '✓ 已确认'
+                      : '✗ 未确认'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-sm font-medium text-gray-700">
+                    情节概要：
+                  </span>
+                  <span className="ml-2">
+                    {currentResearch.material_assessment.has_plot_summary
+                      ? '✓'
+                      : '✗'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-sm font-medium text-gray-700">
+                    独立评论：
+                  </span>
+                  <span className="ml-2">
+                    {currentResearch.material_assessment.has_independent_reviews
+                      ? '✓'
+                      : '✗'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-sm font-medium text-gray-700">
+                    作者背景：
+                  </span>
+                  <span className="ml-2">
+                    {currentResearch.material_assessment.has_author_background
+                      ? '✓'
+                      : '✗'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-sm font-medium text-gray-700">
+                    多元视角：
+                  </span>
+                  <span className="ml-2">
+                    {currentResearch.material_assessment
+                      .has_multiple_perspectives
+                      ? '✓'
+                      : '✗'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="mt-4 grid grid-cols-3 gap-4 text-sm">
+                <div>
+                  <span className="font-medium text-gray-700">
+                    专业书评：
+                  </span>
+                  <span className="ml-1">
+                    {
+                      currentResearch.material_assessment
+                        .professional_review_count
+                    }
+                  </span>
+                </div>
+                <div>
+                  <span className="font-medium text-gray-700">
+                    独立评论：
+                  </span>
+                  <span className="ml-1">
+                    {
+                      currentResearch.material_assessment
+                        .independent_review_count
+                    }
+                  </span>
+                </div>
+                <div>
+                  <span className="font-medium text-gray-700">
+                    独立来源：
+                  </span>
+                  <span className="ml-1">
+                    {currentResearch.material_assessment.total_unique_sources}
+                  </span>
+                </div>
+              </div>
+
+              {currentResearch.material_assessment.identified_gaps &&
+                currentResearch.material_assessment.identified_gaps.length >
+                  0 && (
+                  <div className="mt-4">
+                    <span className="text-sm font-medium text-gray-700">
+                      识别的缺口：
+                    </span>
+                    <ul className="mt-2 space-y-1">
+                      {currentResearch.material_assessment.identified_gaps.map(
+                        (gap, idx) => (
+                          <li
+                            key={idx}
+                            className="text-sm text-gray-600 list-disc list-inside"
+                          >
+                            {gap}
+                          </li>
+                        )
+                      )}
+                    </ul>
+                  </div>
+                )}
+
+              {currentResearch.material_assessment.suggested_searches &&
+                currentResearch.material_assessment.suggested_searches.length >
+                  0 && (
+                  <div className="mt-4">
+                    <span className="text-sm font-medium text-gray-700">
+                      建议补充搜索：
+                    </span>
+                    <ul className="mt-2 space-y-1">
+                      {currentResearch.material_assessment.suggested_searches.map(
+                        (search, idx) => (
+                          <li
+                            key={idx}
+                            className="text-sm text-blue-600 list-disc list-inside"
+                          >
+                            {search}
+                          </li>
+                        )
+                      )}
+                    </ul>
+                  </div>
+                )}
+            </div>
+          )}
+        </>
+      )}
+
+      {currentResearch && currentResearch.status === 'failed' && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-6">
+          <h2 className="text-lg font-semibold text-red-900 mb-2">
+            研究任务失败
+          </h2>
+          <p className="text-red-700">{currentResearch.error_message}</p>
+        </div>
+      )}
+
+      {currentResearch && currentResearch.status === 'running' && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
+          <h2 className="text-lg font-semibold text-blue-900 mb-2">
+            研究进行中...
+          </h2>
+          <div className="flex items-center space-x-3">
+            <div className="flex-1">
+              <div className="w-full bg-blue-200 rounded-full h-2">
+                <div
+                  className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                  style={{
+                    width: `${(currentResearch.progress || 0) * 100}%`,
+                  }}
+                ></div>
+              </div>
+            </div>
+            <span className="text-sm text-blue-700">
+              {((currentResearch.progress || 0) * 100).toFixed(0)}%
+            </span>
+          </div>
+          {currentResearch.current_step && (
+            <p className="text-sm text-blue-700 mt-2">
+              当前步骤：{currentResearch.current_step}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
