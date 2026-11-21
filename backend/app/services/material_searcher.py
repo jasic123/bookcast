@@ -1,9 +1,11 @@
 """Material searcher service - handles source discovery and content retrieval."""
 
 import asyncio
+import re
 from typing import List, Dict, Any, Optional
 from bs4 import BeautifulSoup
 import httpx
+from urllib.parse import urlsplit, urlunsplit
 from app.services.search_client import SearchClient
 from app.services.llm_client import LLMClient
 from app.core.config import settings
@@ -28,48 +30,63 @@ class MaterialSearcherService:
 
         Returns list of raw search results with title, url, content.
         """
-        search_tasks = []
+        # Reserve one result per professional outlet before filling the remaining slots.
+        outlets = ["kirkusreviews.com", "publishersweekly.com", "booklistonline.com",
+                   "libraryjournal.com", "theguardian.com", "nybooks.com", "lrb.co.uk"]
+        author_part = f" {book_author}" if book_author else ""
+        tasks = [self.search_client.search(
+            f'site:{site} "{book_title}"{author_part} book review', max_results=5
+        ) for site in outlets]
+        tasks += [self.search_client.search_book_info(book_title, book_author),
+                  self.search_client.search_book_reviews(book_title, book_author)]
+        tasks += [self.search_client.search_book_reviews(book_title, book_author, theme)
+                  for theme in themes[:3]]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        all_results, seen = [], set()
 
-        # General book information
-        search_tasks.append(
-            self.search_client.search_book_info(book_title, book_author)
-        )
+        def add(item):
+            url = item.get("url", "")
+            try:
+                parsed = urlsplit(url)
+                host = (parsed.hostname or "").lower().removeprefix("www.")
+                if parsed.scheme not in ("http", "https") or not host:
+                    return False
+                key = urlunsplit(("https", host, parsed.path.rstrip("/"), "", ""))
+            except (ValueError, AttributeError):
+                return False
+            if key in seen:
+                return False
+            seen.add(key)
+            all_results.append(item)
+            return True
 
-        # Reviews
-        search_tasks.append(
-            self.search_client.search_book_reviews(book_title, book_author)
-        )
-
-        # Theme-specific searches
-        for theme in themes[:3]:  # Limit to first 3 themes
-            search_tasks.append(
-                self.search_client.search_book_reviews(
-                    book_title, book_author, theme
-                )
-            )
-
-        # Targeted site searches
-        search_tasks.append(
-            self.search_client.search_targeted_sites(book_title, book_author)
-        )
-
-        # Execute all searches concurrently
-        results = await asyncio.gather(*search_tasks, return_exceptions=True)
-
-        # Flatten and deduplicate
-        all_results = []
-        seen_urls = set()
-
-        for result in results:
-            if isinstance(result, Exception):
-                continue
+        # Site search can return unrelated domains; verify the domain before reserving it.
+        for site, result in zip(outlets, results):
+            if isinstance(result, list):
+                title_terms = set(re.findall(r"[\w]+", book_title.lower()))
+                author_terms = set(re.findall(r"[\w]+", (book_author or "").lower()))
+                def score(item):
+                    words = set(re.findall(r"[\w]+", (item.get("title", "") + " " + item.get("content", "")).lower()))
+                    title_words = set(re.findall(r"[\w]+", item.get("title", "").lower()))
+                    title_score = len(title_terms & title_words) / max(len(title_terms), 1)
+                    author_score = len(author_terms & words) / max(len(author_terms), 1)
+                    url = item.get("url", "").lower()
+                    is_review = "review" in url or "review" in item.get("title", "").lower()
+                    is_news = "/news" in url or "book pulse" in item.get("title", "").lower()
+                    return title_score >= 0.6 and (not author_terms or author_score >= 0.5), is_review and not is_news, title_score, author_score
+                ranked = sorted(result, key=score, reverse=True)
+                for item in ranked:
+                    try:
+                        host = (urlsplit(item.get("url", "")).hostname or "").lower()
+                    except (ValueError, AttributeError):
+                        continue
+                    _, _, title_score, author_score = score(item)
+                    if title_score >= 0.6 and (not author_terms or author_score >= 0.5) and not urlsplit(item.get("url", "")).path.lower().endswith(".pdf") and (host == site or host.endswith("." + site)) and add(item):
+                        break
+        for result in results[len(outlets):]:
             if isinstance(result, list):
                 for item in result:
-                    url = item.get("url", "")
-                    if url and url not in seen_urls:
-                        seen_urls.add(url)
-                        all_results.append(item)
-
+                    add(item)
         return all_results
 
     async def fetch_content(self, url: str) -> tuple[Optional[str], Optional[str]]:

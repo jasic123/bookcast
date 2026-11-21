@@ -19,6 +19,7 @@ class SearchClient:
         query: str,
         search_depth: str = "advanced",
         max_results: int = None,
+        raise_errors: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Perform a search query.
@@ -56,8 +57,9 @@ class SearchClient:
 
             return results
 
-        except Exception as e:
-            # Return empty results on error, let caller handle
+        except Exception:
+            if raise_errors:
+                raise
             return []
 
     async def search_book_info(

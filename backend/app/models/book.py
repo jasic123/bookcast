@@ -1,6 +1,6 @@
 """Book and BookList models."""
 
-from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, Index
+from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, Index, JSON
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from app.core.database import Base
@@ -60,3 +60,11 @@ class Book(Base):
         Index("idx_book_isbn", "isbn"),
         Index("idx_book_asin", "asin"),
     )
+
+
+class BookTopics(Base):
+    """AI-generated preliminary topics for a book."""
+    __tablename__ = "book_topics"
+
+    book_id = Column(Integer, ForeignKey("books.id", ondelete="CASCADE"), primary_key=True)
+    topics = Column(JSON, nullable=False)

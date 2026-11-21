@@ -30,16 +30,17 @@ class ThemeScreenerService:
         - evidence: List[str]
         - source_indices: List[int]
         """
-        # If description is insufficient, search for book info
-        search_results = []
-        if not book_description or len(book_description) < 100:
-            search_results = await self.search_client.search_book_info(
-                book_title, book_author
-            )
-
-        # Analyze each theme
         theme_matches = []
         for theme in themes:
+            author_part = f" {book_author}" if book_author else ""
+            query = f'"{book_title}"{author_part} {theme} book themes review'
+            try:
+                search_results = await self.search_client.search(query, raise_errors=True)
+                search_error = None
+            except Exception:
+                search_results = []
+                search_error = "主题搜索失败，无法核实匹配情况。"
+
             match_result = await self.llm_client.analyze_theme_match(
                 book_title=book_title,
                 book_author=book_author,
@@ -47,13 +48,28 @@ class ThemeScreenerService:
                 theme=theme,
                 search_results=search_results,
             )
-
+            status = match_result.get("status", "pending")
+            if status not in ("candidate", "pending", "no_evidence"):
+                status = "pending"
+            reasoning = match_result.get("reasoning")
+            if not isinstance(reasoning, str) or not reasoning.strip():
+                status, reasoning = "pending", "AI 未能提供有效的主题判断，请重试。"
+            if not search_results:
+                status = "pending"
+                reason = search_error or "主题搜索没有返回结果，证据不足，暂无法判断是否匹配。"
+                reasoning = reason + " " + reasoning
+            suggestions = match_result.get("suggested_themes", [])
+            if not isinstance(suggestions, list):
+                suggestions = []
+            suggestions = [x.strip()[:50] for x in suggestions if isinstance(x, str) and x.strip()][:3]
+            if not search_results:
+                suggestions = []
             theme_matches.append({
-                "theme": theme,
-                "status": match_result.get("status", "pending"),
-                "reasoning": match_result.get("reasoning", ""),
+                "theme": theme, "status": status, "reasoning": reasoning,
                 "evidence": match_result.get("evidence", []),
                 "source_indices": match_result.get("source_indices", []),
+                "suggested_themes": suggestions,
+                "search_sources": [{"title": r.get("title", ""), "url": r.get("url", "")} for r in search_results[:5]],
             })
 
         return theme_matches

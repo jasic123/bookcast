@@ -13,6 +13,17 @@ class ResearchCreate(BaseModel):
     match_mode: str = Field(default="any", pattern="^(any|all)$")
 
 
+class ThemeSearchSource(BaseModel):
+    title: str
+    url: str
+
+
+class ThemeMatchDetailsResponse(BaseModel):
+    suggested_themes: List[str] = Field(default_factory=list)
+    search_sources: List[ThemeSearchSource] = Field(default_factory=list)
+    model_config = {"from_attributes": True}
+
+
 class ThemeMatchResponse(BaseModel):
     """Schema for theme match response."""
     id: int
@@ -21,6 +32,7 @@ class ThemeMatchResponse(BaseModel):
     reasoning: str
     supporting_sources: Optional[List[int]] = None
     evidence_quotes: Optional[List[str]] = None
+    details: Optional[ThemeMatchDetailsResponse] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

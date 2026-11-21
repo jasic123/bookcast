@@ -8,6 +8,13 @@ export default function ResearchPage() {
   const [book, setBook] = useState<Book | null>(null)
   const [researches, setResearches] = useState<Research[]>([])
   const [currentResearch, setCurrentResearch] = useState<Research | null>(null)
+  const [article, setArticle] = useState<Awaited<ReturnType<typeof researchApi.createReviewArticle>> | null>(null)
+  const [articleLoading, setArticleLoading] = useState(false)
+  const [articleError, setArticleError] = useState<string | null>(null)
+  const [reviews, setReviews] = useState<Awaited<ReturnType<typeof researchApi.getReviewDigest>>['reviews']>([])
+  const [reviewsLoading, setReviewsLoading] = useState(false)
+  const [reviewsError, setReviewsError] = useState(false)
+  const [reviewsAttempt, setReviewsAttempt] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -47,6 +54,38 @@ export default function ResearchPage() {
 
     return () => clearInterval(interval)
   }, [jobId, bookId])
+
+  useEffect(() => {
+    if (!currentResearch || currentResearch.status !== 'completed') return
+    let active = true
+    setReviews([])
+    setArticle(null)
+    setArticleError(null)
+    setReviewsError(false)
+    setReviewsLoading(true)
+    researchApi.getReviewDigest(currentResearch.id).then((result) => {
+      if (active) { setReviews(result.reviews); setReviewsError(result.incomplete) }
+    }).catch(() => {
+      if (active) setReviewsError(true)
+    }).finally(() => {
+      if (active) setReviewsLoading(false)
+    })
+    return () => { active = false }
+  }, [currentResearch?.id, currentResearch?.status, reviewsAttempt])
+
+  const generateArticle = async () => {
+    if (!currentResearch) return
+    setArticleLoading(true)
+    setArticleError(null)
+    try {
+      const result = await researchApi.createReviewArticle(currentResearch.id)
+      setArticle(result)
+    } catch (err: any) {
+      setArticleError(err.response?.data?.detail || '综合书评生成失败，请重试。')
+    } finally {
+      setArticleLoading(false)
+    }
+  }
 
   const loadBook = async (id: number) => {
     try {
@@ -352,6 +391,19 @@ export default function ResearchPage() {
                         </span>
                       </div>
                       <p className="text-gray-700 mb-3">{match.reasoning}</p>
+                      {match.details?.suggested_themes?.length ? (
+                        <p className="text-sm text-blue-700 mb-3">AI 建议的相关主题（待核实）：{match.details.suggested_themes.join('、')}</p>
+                      ) : match.details ? <p className="text-sm text-gray-500 mb-3">暂未发现有资料支持的其他主题。</p> : null}
+                      {match.details?.search_sources?.length ? (
+                        <div className="text-sm text-gray-600 mb-3">
+                          <span>本次主题搜索来源：</span>
+                          <ul className="list-disc list-inside mt-1">
+                            {match.details.search_sources.filter((source) => /^https?:\/\//i.test(source.url)).map((source, idx) => (
+                              <li key={idx}><a className="text-blue-600 hover:underline" href={source.url} target="_blank" rel="noopener noreferrer">{source.title || source.url}</a></li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
                       {match.evidence_quotes &&
                         match.evidence_quotes.length > 0 && (
                           <div className="bg-gray-50 rounded p-3">
@@ -375,6 +427,38 @@ export default function ResearchPage() {
                 </div>
               </div>
             )}
+
+          <div className="bg-white shadow rounded-lg p-6 mb-6">
+            <h2 className="text-lg font-semibold text-gray-900 mb-2">综合书评</h2>
+            <p className="text-sm text-gray-500 mb-4">AI 根据已整理的书评和来源摘录分章节撰写；信息不足处会标明，引用前请核对原文。若来源不足以支撑深入分析，章节会明确指出资料缺口。</p>
+            <button onClick={generateArticle} disabled={articleLoading || reviewsLoading || reviewsError || reviews.length === 0} className="px-4 py-2 bg-blue-600 text-white rounded-md disabled:bg-gray-400">{articleLoading ? '正在生成…' : article ? '查看已生成长篇书评' : '生成长篇综合书评'}</button>
+            {articleError && <p className="text-sm text-red-700 mt-3">{articleError}</p>}
+            {article && <div className="mt-5 space-y-4">
+              <h3 className="text-lg font-semibold">{article.title}</h3>
+              {article.paragraphs.map((part, index) => <div key={index}>
+                {(index === 0 || article.paragraphs[index - 1].section !== part.section) && <h4 className="font-semibold text-gray-900 mb-2">{part.section}</h4>}
+                <p className="text-gray-700 leading-7 whitespace-pre-line">{part.text} <span className="text-blue-700 text-sm">{part.source_ids.map((id) => `[${id}]`).join(' ')}</span></p>
+              </div>)}
+              <div className="border-t pt-3 text-sm"><h4 className="font-medium mb-2">参考来源</h4><ul className="space-y-1">{article.sources.map((source) => <li key={source.source_id}>[{source.source_id}] {/^https?:\/\//i.test(source.url) ? <a href={source.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">{source.title}</a> : source.title}{source.basis === 'search_snippet' && '（依据搜索摘要）'}</li>)}</ul></div>
+            </div>}
+          </div>
+
+          <div className="bg-white shadow rounded-lg p-6 mb-6">
+            <h2 className="text-lg font-semibold text-gray-900 mb-2">书评整理</h2>
+            <p className="text-sm text-gray-500 mb-4">AI 根据已收集资料整理各来源观点，请打开原文核实。</p>
+            {reviewsLoading && <p className="text-sm text-gray-500">正在整理书评，首次可能需要一些时间…</p>}
+            {reviewsError && <p className="text-sm text-red-700">部分书评整理失败或尚未完成。 <button className="underline" onClick={() => setReviewsAttempt(reviewsAttempt + 1)}>重试</button></p>}
+            {!reviewsLoading && !reviewsError && reviews.length === 0 && <p className="text-sm text-gray-500">当前资料中没有可整理的书评。</p>}
+            <div className="space-y-4">{reviews.map((review) => (
+              <div key={review.source_id} className="border border-gray-200 rounded-lg p-4">
+                <h3 className="font-medium text-gray-900">{review.title}</h3>
+                <p className="text-xs text-gray-500 mt-1">{review.basis === 'page' ? '依据已获取网页文本（可能不完整）' : '依据搜索摘要，原网页未获取'}</p>
+                <p className="text-sm text-gray-700 mt-3">{review.summary}</p>
+                {review.points.length > 0 && <ul className="list-disc list-inside text-sm text-gray-700 mt-2">{review.points.map((point, index) => <li key={index}>{point}</li>)}</ul>}
+                {/^https?:\/\//i.test(review.url) && <a className="text-sm text-blue-600 hover:underline" href={review.url} target="_blank" rel="noopener noreferrer">查看原文</a>}
+              </div>
+            ))}</div>
+          </div>
 
           {/* Sources */}
           {currentResearch.sources && currentResearch.sources.length > 0 && (
@@ -444,9 +528,9 @@ export default function ResearchPage() {
                       <span>
                         状态：
                         {source.fetch_status === 'fetched'
-                          ? '已获取'
+                          ? '已获取网页文本（可能不完整）'
                           : source.fetch_status === 'failed'
-                          ? '获取失败'
+                          ? source.summary ? '原网页未获取，使用搜索摘要' : '原网页未获取，无可用摘要'
                           : source.fetch_status}
                       </span>
                       {source.relevance_score !== null && (
@@ -464,7 +548,7 @@ export default function ResearchPage() {
 
                     {source.fetch_error && (
                       <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded text-xs text-red-700">
-                        错误：{source.fetch_error}
+                        原网页未获取：{source.fetch_error}。{source.summary ? '已使用搜索摘要，内容需核实。' : '可尝试打开来源链接。'}
                       </div>
                     )}
                   </div>

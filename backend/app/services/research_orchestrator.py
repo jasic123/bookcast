@@ -8,7 +8,7 @@ from datetime import datetime
 
 from app.models.book import Book
 from app.models.research import (
-    Research, ThemeMatch, Source, MaterialAssessment,
+    Research, ThemeMatch, ThemeMatchDetails, Source, MaterialAssessment,
     MatchStatus, SourceType, SufficiencyLevel
 )
 from app.services.theme_screener import ThemeScreenerService
@@ -102,6 +102,10 @@ class ResearchOrchestrator:
                     supporting_sources=tm.get("source_indices"),
                     evidence_quotes=tm.get("evidence"),
                 )
+                theme_match.details = ThemeMatchDetails(
+                    suggested_themes=tm.get("suggested_themes", []),
+                    search_sources=tm.get("search_sources", []),
+                )
                 self.db.add(theme_match)
 
             await self.db.commit()
@@ -113,12 +117,13 @@ class ResearchOrchestrator:
             )
 
             if not is_candidate:
-                research.overall_assessment = SufficiencyLevel.NO_THEME_EVIDENCE
-                research.assessment_reasoning = "No themes show sufficient evidence"
+                pending = any(tm["status"] == "pending" for tm in theme_matches)
+                research.overall_assessment = SufficiencyLevel.NEEDS_REVIEW if pending else SufficiencyLevel.NO_THEME_EVIDENCE
+                research.assessment_reasoning = "部分主题证据不足，需进一步核实。" if pending else "当前检索资料未显示足够的主题匹配证据。"
                 research.status = "completed"
                 research.completed_at = datetime.utcnow()
                 await self.db.commit()
-                return {"status": "completed", "assessment": "no_theme_evidence"}
+                return {"status": "completed", "assessment": research.overall_assessment.value}
 
             # Step 2: Search for materials (40%)
             await self._update_progress(research, 0.3, "Searching for materials")
@@ -178,9 +183,12 @@ class ResearchOrchestrator:
                         book_author=book.author,
                     )
 
-                    source.source_type = SourceType(classification.get("source_type", "other"))
+                    try:
+                        source.source_type = SourceType(classification.get("source_type", "other"))
+                    except ValueError:
+                        source.source_type = SourceType.OTHER
                     source.source_classification_reasoning = classification.get("reasoning")
-                    source.is_about_target_book = classification.get("is_about_target", True)
+                    source.is_about_target_book = classification.get("is_about_target") is True
                     source.book_identity_reasoning = classification.get("identity_reasoning")
                     source.summary = classification.get("summary")
                     source.key_points = classification.get("key_points", [])
@@ -240,15 +248,16 @@ class ResearchOrchestrator:
             has_multiple_perspectives = len(unique_sources) >= 3
 
             # LLM assessment
+            theme_result = await self.db.execute(
+                select(ThemeMatch).where(ThemeMatch.research_id == research.id)
+            )
             theme_data = [
                 {
                     "theme": tm.theme,
                     "status": tm.status.value,
                     "reasoning": tm.reasoning,
                 }
-                for tm in await self.db.execute(
-                    select(ThemeMatch).where(ThemeMatch.research_id == research.id)
-                ).then(lambda r: r.scalars().all())
+                for tm in theme_result.scalars().all()
             ]
 
             source_data = [

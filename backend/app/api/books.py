@@ -5,9 +5,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from typing import List
+import json
+import logging
 
 from app.core.database import get_db
-from app.models.book import Book, BookList
+from app.models.book import Book, BookList, BookTopics
 from app.schemas.book import (
     BookListCreate,
     BookListResponse,
@@ -16,8 +18,10 @@ from app.schemas.book import (
     CSVUploadRequest,
 )
 from app.services.book_fetcher import BookFetcherService
+from app.services.llm_client import LLMClient
 
 router = APIRouter(prefix="/books", tags=["books"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/lists/amazon", response_model=BookListResponse)
@@ -152,6 +156,49 @@ async def get_book_list(list_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Book list not found")
 
     return book_list
+
+
+@router.post("/lists/{list_id}/topics")
+async def classify_book_topics(list_id: int, db: AsyncSession = Depends(get_db)):
+    """Return cached preliminary topics and classify books that lack them."""
+    book_list = (await db.execute(
+        select(BookList).options(selectinload(BookList.books)).where(BookList.id == list_id)
+    )).scalar_one_or_none()
+    if not book_list:
+        raise HTTPException(status_code=404, detail="Book list not found")
+    book_ids = [book.id for book in book_list.books]
+    cached = (await db.execute(select(BookTopics).where(BookTopics.book_id.in_(book_ids)))).scalars().all()
+    topics = {row.book_id: row.topics for row in cached}
+    missing = [book for book in book_list.books if book.id not in topics]
+    if missing:
+        client = LLMClient()
+        try:
+            for start in range(0, len(missing), 5):
+                batch = missing[start:start + 5]
+                data = [{"id": b.id, "title": b.title, "author": b.author,
+                         "description": (b.description or "")[:500]} for b in batch]
+                response = await client.chat_completion([
+                    {"role": "system", "content": '根据书名、作者和简介为每本书提供一到三个简短中文主题标签，不确定请标注“待确认”。必须按下面格式给每本书返回一条记录，保留原始 id，禁止省略：{"books":[{"id":1,"topics":["科普"]}]}。仅输出 JSON，不要添加 Markdown。'},
+                    {"role": "user", "content": json.dumps(data, ensure_ascii=False)},
+                ], temperature=0.2, max_tokens=1500)
+                parsed = json.loads(response.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip())
+                if isinstance(parsed, dict) and isinstance(parsed.get("books"), list):
+                    parsed = {str(item.get("id")): item.get("topics") for item in parsed["books"] if isinstance(item, dict)}
+                if not isinstance(parsed, dict):
+                    raise ValueError("Invalid topic response")
+                for book in batch:
+                    values = parsed.get(str(book.id))
+                    if not isinstance(values, list):
+                        continue
+                    labels = [v.strip()[:30] for v in values if isinstance(v, str) and v.strip() and v.strip() != "待确认"][:3]
+                    topics[book.id] = labels
+                    db.add(BookTopics(book_id=book.id, topics=labels))
+                await db.commit()
+        except Exception:
+            logger.exception("Book topic classification failed")
+            await db.rollback()
+            raise HTTPException(status_code=502, detail="主题分类暂时失败，请稍后重试。")
+    return {str(book_id): labels for book_id, labels in topics.items()}
 
 
 @router.get("/{book_id}", response_model=BookResponse)

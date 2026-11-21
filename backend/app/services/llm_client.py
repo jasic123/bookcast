@@ -63,7 +63,7 @@ class LLMClient:
         desc_info = f"\n\nBook description: {book_description}" if book_description else ""
 
         search_context = "\n\n".join([
-            f"Source {i+1} ({result.get('title', 'Untitled')}):\n{result.get('content', '')[:500]}"
+            f"Source {i+1} ({result.get('title', 'Untitled')}), URL: {result.get('url', '')}:\n{result.get('content', '')[:500]}"
             for i, result in enumerate(search_results[:5])
         ])
 
@@ -83,14 +83,17 @@ Instructions:
    - "no_evidence": No evidence found for this theme
 
 4. Provide specific reasoning and quote relevant passages
-5. List which sources support your conclusion (by number)
+5. List which sources support your conclusion (zero-based indices)
+6. Identify 1-3 alternative themes in Chinese that the supplied material actually describes, even when it does not support the requested theme. Only return an empty list if no alternative subject is supported by any supplied material.
+7. Write the reasoning in Chinese and explain why the supplied material does or does not support the requested theme. Do not invent evidence or claim the book does not discuss a theme merely because the snippets do not mention it.
 
 Respond in JSON format:
 {{
   "status": "candidate|pending|no_evidence",
   "reasoning": "explanation here",
   "evidence": ["quote 1", "quote 2"],
-  "source_indices": [0, 1]
+  "source_indices": [0, 1],
+  "suggested_themes": ["主题"]
 }}"""
 
         messages = [
@@ -103,8 +106,8 @@ Respond in JSON format:
         # Parse JSON response
         import json
         try:
-            result = json.loads(response)
-            return result
+            result = json.loads(response.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip())
+            return result if isinstance(result, dict) else {}
         except json.JSONDecodeError:
             # Fallback if LLM doesn't return valid JSON
             return {
@@ -152,7 +155,7 @@ Tasks:
    - Books with similar titles
 
 2. Classify the source type:
-   - professional_review: Professional critic review
+   - professional_review: A substantive review of the target book by a professional critic or review publication. A publisher site or news report alone is not a review.
    - reader_review: Independent reader review or blog
    - publisher_description: Publisher or bookstore description
    - author_interview: Interview with the author
@@ -161,7 +164,8 @@ Tasks:
    - other: Other relevant content
    - irrelevant: Not about the target book or not useful
 
-3. Extract key information
+3. If the page is news, author interview, or a publisher description, use that type even when hosted on a review publication. If identity or review type is uncertain, use other and is_about_target=false.
+4. Extract key information in Chinese; distinguish the available excerpt from full text.
 
 Respond in JSON:
 {{
@@ -182,13 +186,15 @@ Respond in JSON:
 
         import json
         try:
-            result = json.loads(response)
+            result = json.loads(response.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip())
+            if not isinstance(result, dict):
+                raise ValueError("Invalid classification")
             return result
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, ValueError):
             return {
                 "source_type": "other",
                 "reasoning": "Classification incomplete",
-                "is_about_target": True,
+                "is_about_target": False,
                 "identity_reasoning": "Unable to verify",
                 "summary": content[:200],
                 "key_points": []
@@ -269,7 +275,7 @@ Respond in JSON:
 
         import json
         try:
-            result = json.loads(response)
+            result = json.loads(response.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip())
             return result
         except json.JSONDecodeError:
             return {

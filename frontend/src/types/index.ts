@@ -50,6 +50,7 @@ export interface ThemeMatch {
   reasoning: string
   supporting_sources: number[] | null
   evidence_quotes: string[] | null
+  details: { suggested_themes: string[]; search_sources: { title: string; url: string }[] } | null
   created_at: string
 }
 

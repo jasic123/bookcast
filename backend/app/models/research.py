@@ -85,6 +85,15 @@ class ThemeMatch(Base):
 
     # Relationships
     research = relationship("Research", back_populates="theme_matches")
+    details = relationship("ThemeMatchDetails", uselist=False, cascade="all, delete-orphan")
+
+
+class ThemeMatchDetails(Base):
+    """Search context and alternative themes for a theme screening."""
+    __tablename__ = "theme_match_details"
+    theme_match_id = Column(Integer, ForeignKey("theme_matches.id"), primary_key=True)
+    suggested_themes = Column(JSON, nullable=False, default=list)
+    search_sources = Column(JSON, nullable=False, default=list)
 
 
 class Source(Base):
@@ -160,3 +169,17 @@ class MaterialAssessment(Base):
 
     # Relationships
     research = relationship("Research", back_populates="material_assessment")
+
+
+class ReviewDigest(Base):
+    """Cached source-linked review summaries for a research."""
+    __tablename__ = "review_digests"
+    research_id = Column(Integer, ForeignKey("researches.id"), primary_key=True)
+    reviews = Column(JSON, nullable=False)
+
+
+class ReviewArticle(Base):
+    """A source-linked synthesis of reviews for one research."""
+    __tablename__ = "review_articles"
+    research_id = Column(Integer, ForeignKey("researches.id"), primary_key=True)
+    article = Column(JSON, nullable=False)

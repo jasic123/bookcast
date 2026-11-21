@@ -1,5 +1,5 @@
 import asyncio
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -26,6 +26,15 @@ def test_book_list_endpoints():
                 response = await client.post('/api/books/lists/csv', json={'list_name': 'CSV', 'csv_content': 'title,author\nExample,Writer\n'})
                 assert response.status_code == 200, response.text
                 assert response.json()['books'][0]['title'] == 'Example'
+                list_id = response.json()['id']
+                book_id = response.json()['books'][0]['id']
+                with patch('app.services.llm_client.LLMClient.chat_completion', new_callable=AsyncMock, return_value='{"books":[{"id": %d, "topics":["科普"]}]}' % book_id) as classify:
+                    response = await client.post(f'/api/books/lists/{list_id}/topics')
+                    assert response.status_code == 200, response.text
+                    assert response.json()[str(book_id)] == ['科普']
+                    response = await client.post(f'/api/books/lists/{list_id}/topics')
+                    assert response.status_code == 200, response.text
+                    assert classify.await_count == 1
                 with patch('app.services.book_fetcher.BookFetcherService.fetch_amazon_list', return_value=([BookCreate(title='Amazon book')], 'https://amazon.com/', None, None)):
                     response = await client.post('/api/books/lists/amazon', json={'list_name': 'Amazon'})
                 assert response.status_code == 200, response.text

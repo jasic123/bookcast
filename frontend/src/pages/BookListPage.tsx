@@ -7,6 +7,10 @@ export default function BookListPage() {
   const navigate = useNavigate()
   const [bookLists, setBookLists] = useState<BookList[]>([])
   const [selectedList, setSelectedList] = useState<BookList | null>(null)
+  const [topics, setTopics] = useState<Record<string, string[]>>({})
+  const [classifying, setClassifying] = useState(false)
+  const [topicError, setTopicError] = useState<string | null>(null)
+  const [topicAttempt, setTopicAttempt] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -19,6 +23,22 @@ export default function BookListPage() {
   useEffect(() => {
     loadBookLists()
   }, [])
+
+  useEffect(() => {
+    if (!selectedList) return
+    let active = true
+    setTopics({})
+    setClassifying(true)
+    setTopicError(null)
+    booksApi.classifyTopics(selectedList.id).then((result) => {
+      if (active) setTopics(result)
+    }).catch(() => {
+      if (active) setTopicError('主题分类暂时失败，请重试。')
+    }).finally(() => {
+      if (active) setClassifying(false)
+    })
+    return () => { active = false }
+  }, [selectedList?.id, topicAttempt])
 
   const loadBookLists = async () => {
     try {
@@ -234,6 +254,8 @@ export default function BookListPage() {
           <h2 className="text-lg font-semibold text-gray-900 mb-4">
             {selectedList.name} - 书籍列表
           </h2>
+          <p className="text-sm text-gray-500 mb-4">主题为 AI 根据现有书目信息生成的初步分类，仅供选题参考。{classifying && ' 正在分类…'}</p>
+          {topicError && <p className="text-sm text-red-700 mb-4">{topicError} <button className="underline" onClick={() => setTopicAttempt(topicAttempt + 1)}>重试</button></p>}
 
           {selectedList.books && selectedList.books.length > 0 ? (
             <div className="space-y-3">
@@ -255,6 +277,7 @@ export default function BookListPage() {
                           {book.title}
                         </h3>
                       </div>
+                      <p className="text-sm text-blue-700 mt-1">主题：{topics[book.id]?.length ? topics[book.id].join('、') : classifying ? '分类中…' : '待确认'}</p>
                       {book.author && (
                         <p className="text-sm text-gray-600 mt-1">
                           作者：{book.author}

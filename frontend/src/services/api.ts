@@ -31,6 +31,11 @@ export const booksApi = {
     return response.data
   },
 
+  classifyTopics: async (listId: number): Promise<Record<string, string[]>> => {
+    const response = await api.post(`/books/lists/${listId}/topics`)
+    return response.data
+  },
+
   getBookLists: async (): Promise<BookList[]> => {
     const response = await api.get('/books/lists')
     return response.data
@@ -56,6 +61,16 @@ export const researchApi = {
     message: string
   }> => {
     const response = await api.post('/research/', data)
+    return response.data
+  },
+
+  createReviewArticle: async (researchId: number): Promise<{ title: string; paragraphs: Array<{ text: string; source_ids: number[]; section: string }>; sources: Array<{ source_id: number; title: string; url: string; basis: 'page' | 'search_snippet' }> }> => {
+    const response = await api.post(`/research/${researchId}/review-article`)
+    return response.data
+  },
+
+  getReviewDigest: async (researchId: number): Promise<{ reviews: Array<{ source_id: number; title: string; url: string; basis: 'page' | 'search_snippet'; summary: string; points: string[] }>; incomplete: boolean }> => {
+    const response = await api.get(`/research/${researchId}/reviews`)
     return response.data
   },
 
