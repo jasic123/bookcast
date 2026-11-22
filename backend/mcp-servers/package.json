@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "name": "book-research-mcp-servers",
+  "version": "1.0.0",
+  "dependencies": {
+    "@cyanheads/gutenberg-mcp-server": "0.3.4",
+    "mcp-open-library": "1.3.0"
+  }
+}

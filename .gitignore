@@ -50,6 +50,7 @@ dump.rdb
 # Logs
 *.log
 logs/
+backend/generated_audio/
 
 # Test coverage
 .coverage

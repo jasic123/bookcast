@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import { booksApi, researchApi } from '../services/api'
 import type { Book, Research } from '../types'
+import PodcastPanel from './PodcastPanel'
 
 export default function ResearchPage() {
   const { bookId } = useParams<{ bookId: string }>()
+  const [searchParams] = useSearchParams()
   const [book, setBook] = useState<Book | null>(null)
   const [researches, setResearches] = useState<Research[]>([])
   const [currentResearch, setCurrentResearch] = useState<Research | null>(null)
@@ -19,7 +21,7 @@ export default function ResearchPage() {
   const [error, setError] = useState<string | null>(null)
 
   // Create research form
-  const [themes, setThemes] = useState<string>('')
+  const [themes, setThemes] = useState<string>(() => searchParams.get('theme') || '')
   const [matchMode, setMatchMode] = useState<'any' | 'all'>('any')
   const [jobId, setJobId] = useState<string | null>(null)
   const [jobStatus, setJobStatus] = useState<string | null>(null)
@@ -430,11 +432,17 @@ export default function ResearchPage() {
 
           <div className="bg-white shadow rounded-lg p-6 mb-6">
             <h2 className="text-lg font-semibold text-gray-900 mb-2">综合书评</h2>
-            <p className="text-sm text-gray-500 mb-4">AI 根据已整理的书评和来源摘录分章节撰写；信息不足处会标明，引用前请核对原文。若来源不足以支撑深入分析，章节会明确指出资料缺口。</p>
-            <button onClick={generateArticle} disabled={articleLoading || reviewsLoading || reviewsError || reviews.length === 0} className="px-4 py-2 bg-blue-600 text-white rounded-md disabled:bg-gray-400">{articleLoading ? '正在生成…' : article ? '查看已生成长篇书评' : '生成长篇综合书评'}</button>
+            <p className="text-sm text-gray-500 mb-4">AI 根据书评、图书馆资料和原文节选分章节撰写；节选不代表已读全文，引用前请核对原文。</p>
+            <button onClick={generateArticle} disabled={articleLoading || reviewsLoading || (reviews.length === 0 && !currentResearch.sources?.some((source) => source.is_about_target_book && !source.is_duplicate && (source.summary || source.title.startsWith('Open Library 图书资料：') || source.title.startsWith('Project Gutenberg 原文节选：'))))} className="px-4 py-2 bg-blue-600 text-white rounded-md disabled:bg-gray-400">{articleLoading ? '正在生成…' : article ? '查看已生成长篇书评' : '生成长篇综合书评'}</button>
+            {!reviewsLoading && reviews.length === 0 && !currentResearch.sources?.some((source) => source.is_about_target_book && !source.is_duplicate && (source.summary || source.title.startsWith('Open Library 图书资料：') || source.title.startsWith('Project Gutenberg 原文节选：'))) && <p className="text-sm text-amber-700 mt-2">尚未收集到可用资料，请重新创建研究任务后再生成书评。</p>}
             {articleError && <p className="text-sm text-red-700 mt-3">{articleError}</p>}
             {article && <div className="mt-5 space-y-4">
               <h3 className="text-lg font-semibold">{article.title}</h3>
+              {article.incomplete && <p className="text-sm text-amber-700">{article.warnings.join(' ')} 点击生成按钮可重试。</p>}
+              <details className="text-sm text-gray-700 border rounded p-3"><summary className="cursor-pointer">资料初筛与证据精筛：{article.source_review.considered} 条中保留 {article.source_review.selected} 条</summary>
+                {article.source_review.findings.map((item, index) => <p key={index} className="mt-2">{item.kind}：{item.text} <span className="text-blue-700">{item.source_ids.map((id) => `[${id}]`).join(' ')}</span></p>)}
+                {article.source_review.gaps.map((gap, index) => <p key={index} className="mt-2 text-amber-700">资料缺口：{gap}</p>)}
+              </details>
               {article.paragraphs.map((part, index) => <div key={index}>
                 {(index === 0 || article.paragraphs[index - 1].section !== part.section) && <h4 className="font-semibold text-gray-900 mb-2">{part.section}</h4>}
                 <p className="text-gray-700 leading-7 whitespace-pre-line">{part.text} <span className="text-blue-700 text-sm">{part.source_ids.map((id) => `[${id}]`).join(' ')}</span></p>
@@ -442,6 +450,8 @@ export default function ResearchPage() {
               <div className="border-t pt-3 text-sm"><h4 className="font-medium mb-2">参考来源</h4><ul className="space-y-1">{article.sources.map((source) => <li key={source.source_id}>[{source.source_id}] {/^https?:\/\//i.test(source.url) ? <a href={source.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">{source.title}</a> : source.title}{source.basis === 'search_snippet' && '（依据搜索摘要）'}</li>)}</ul></div>
             </div>}
           </div>
+
+          <PodcastPanel researchId={currentResearch.id} />
 
           <div className="bg-white shadow rounded-lg p-6 mb-6">
             <h2 className="text-lg font-semibold text-gray-900 mb-2">书评整理</h2>

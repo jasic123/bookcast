@@ -4,6 +4,10 @@ from tavily import TavilyClient
 from typing import List, Dict, Any
 from app.core.config import settings
 import asyncio
+import logging
+import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class SearchClient:
@@ -33,6 +37,29 @@ class SearchClient:
             List of search results with title, url, content
         """
         max_results = max_results or self.max_results
+
+        if settings.DOUBAO_SEARCH_API_KEY:
+            try:
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    response = await client.post(
+                        settings.DOUBAO_SEARCH_BASE_URL.rstrip("/") + "/search_api/web_search",
+                        headers={"Authorization": "Bearer " + settings.DOUBAO_SEARCH_API_KEY,
+                                 "X-Traffic-Tag": "book_podcast_research"},
+                        json={"Query": query, "SearchType": "web", "Count": min(max_results, 50), "NeedSummary": True},
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                    error = (data.get("ResponseMetadata") or {}).get("Error") or {}
+                    if error.get("Code"):
+                        raise ValueError("SearchInfinity error: " + str(error["Code"]))
+                    items = (data.get("Result") or {}).get("WebResults", [])
+                    results = [{"title": x.get("Title", ""), "url": x.get("Url", ""),
+                                "content": x.get("Summary") or x.get("Content") or x.get("Snippet") or "", "score": 0.0}
+                               for x in items if isinstance(x, dict) and x.get("Url")]
+                    if results:
+                        return results
+            except (httpx.HTTPError, ValueError, TypeError, AttributeError) as error:
+                logger.warning("SearchInfinity unavailable, falling back to Tavily: %s", type(error).__name__)
 
         try:
             # Tavily client is synchronous, run in thread pool

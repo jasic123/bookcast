@@ -132,6 +132,32 @@ cd backend
 pytest tests/acceptance/
 ```
 
+## 图书资料与搜索配置
+
+首页支持按主题找书：通过网络检索收集候选作品，核对主题证据、Open Library 书目及作者的明确国家身份，再返回最多 10 本。每本展示关联理由和可点击的主题、作者证据来源；证据不足时可能返回更少或零本。选择书籍后可继续创建研究任务和播客稿。原有书单仍可在“历史书单”中访问。
+
+研究流程使用 AutoGen 专项 Agent 分别完成书目核对、主题判断、资料收集、证据评估和书评章节撰写。Open Library 的简介和 Project Gutenberg 的原文节选保留来源；节选不代表读过全书。
+
+安装 Python 3.10 或更新版本及 Node.js 24 后，在项目目录执行：
+
+```powershell
+cd backend
+python -m pip install -r requirements.txt
+npm install --prefix mcp-servers
+```
+
+要使用火山引擎 SearchInfinity Custom 联网搜索，在 `backend/.env` 配置 `DOUBAO_SEARCH_API_KEY`；地址默认为 `https://open.feedcoopapi.com`。使用 SearchInfinity 搜索专用 API Key，未填写或搜索失败时继续使用 Tavily。不要将 `.env` 提交到 Git。
+
+`GOODREADS_PROXY` 可为 Goodreads、Open Library 和 Gutenberg MCP 设置本机 HTTP 代理；不需要代理时留空。修改配置后重启后端和研究队列工作进程。
+
+### 播客对话稿
+
+在已完成的研究页面填写播客主题、时长、风格、听众，可粘贴或导入 TXT / Markdown 参考资料。任务通过 Redis 队列后台执行；AutoGen GraphFlow 使用单线程运行时依次调度策划、资料研究、脚本撰写和评审。评审不通过时返回撰稿修改，最多三版；仍未通过时显示人工复核和评审意见，不会标记为通过。系统保留大纲、来源、各版文稿及评审记录；引用和事实仍需人工核对。
+
+文稿完成评审后可单独点击“生成播客音频”：参考 NeuralNoise 的分角色台词、逐段 TTS 与合成流程，用 SiliconFlow CosyVoice2 为主持人和嘉宾分别配音，导出可播放、可下载的 WAV。未通过 AI 评审的文稿仍可生成试听音频，但必须先查看问题并明确勾选确认，音频不会被标记为评审通过。默认音色为 `alex` / `anna`；页面可输入自己的音色 ID，后续取得定制音色后即可替换。没有定制音色时不要输入他人的音色 ID。生成失败只影响音频状态，不会删除文稿。
+
+语音接口使用 `backend/.env` 中的 `TTS_API_KEY`；如留空且 `LLM_BASE_URL` 指向 SiliconFlow，则复用现有 `LLM_API_KEY`。`TTS_BASE_URL` 默认 `https://api.siliconflow.cn/v1`，`TTS_MODEL` 默认 `FunAudioLLM/CosyVoice2-0.5B`。合成会产生语音服务费用，建议先用短稿尝试。
+
 ## 当前限制
 
 - Amazon 抓取依赖公开榜单结构,站点变化可能导致失败
@@ -143,9 +169,10 @@ pytest tests/acceptance/
 
 本版本聚焦验证核心链路,以下功能计划后续实现:
 
-- [ ] 播客文稿生成
+- [x] 播客文稿生成
 - [ ] 文稿编辑与终审
-- [ ] TTS 与音频生成
+- [x] 预设音色 TTS 与 WAV 音频生成
+- [ ] 用户声音样本上传、授权与定制音色创建
 - [ ] 用户账户与权限
 - [ ] 生产环境部署
 

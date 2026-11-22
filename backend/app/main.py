@@ -8,6 +8,8 @@ from app.core.config import settings
 from app.core.database import init_db
 from app.api.books import router as books_router
 from app.api.research import router as research_router
+from app.api.podcasts import router as podcasts_router
+from app.api.theme_search import router as theme_search_router
 
 
 @asynccontextmanager
@@ -38,6 +40,8 @@ app.add_middleware(
 # Include routers
 app.include_router(books_router, prefix="/api")
 app.include_router(research_router, prefix="/api")
+app.include_router(podcasts_router, prefix="/api")
+app.include_router(theme_search_router, prefix="/api")
 
 
 @app.get("/")

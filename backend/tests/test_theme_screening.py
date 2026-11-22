@@ -34,8 +34,13 @@ def test_screening_searches_and_persists_details():
             screening.llm_client.analyze_theme_match = AsyncMock(return_value={'status': 'no_evidence', 'reasoning': '资料没有提及死亡。', 'suggested_themes': ['家庭']})
             orchestrator = ResearchOrchestrator(db)
             orchestrator.theme_screener = screening
-            result = await orchestrator.conduct_research(research_id)
+            orchestrator.material_searcher.search_materials = AsyncMock(return_value=[])
+            review = {'title': 'Goodreads 读者评论：Alice（4/5）', 'url': 'https://www.goodreads.com/review/show/123', 'content': 'A reader opinion', 'rating': 4}
+            with patch('app.services.research_orchestrator.search_goodreads_reviews', new_callable=AsyncMock, return_value=[review]):
+                result = await orchestrator.conduct_research(research_id)
             assert result['assessment'] == 'no_theme_evidence'
+            assert result['unique_sources'] == 1
+            orchestrator.material_searcher.search_materials.assert_awaited_once()
             assert '死亡' in screening.search_client.search.await_args.args[0]
         async def test_db():
             async with sessions() as db:
@@ -155,7 +160,7 @@ def test_review_article_requires_valid_sources_and_caches():
         try:
             invalid = '{"title":"Test","paragraphs":[{"text":"Example", "source_ids":[999]}]}'
             valid = '{\"title\":\"Test\",\"paragraphs\":[' + ','.join(['{\"text\":\"' + ('Example analysis ' * 20) + '\",\"source_ids\":[7]}'] * 2) + ']}'
-            with patch('app.services.llm_client.LLMClient.chat_completion', new_callable=AsyncMock, side_effect=[invalid, valid, valid, valid, valid]) as model:
+            with patch('app.api.research.curate_review_sources', new_callable=AsyncMock, side_effect=lambda client, book, sources: (sources, {'findings': [], 'gaps': []}, [])), patch('app.services.llm_client.LLMClient.chat_completion', new_callable=AsyncMock, side_effect=[invalid, valid, valid, valid, valid]) as model:
                 async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
                     response = await client.post(f'/api/research/{research_id}/review-article')
                     assert response.status_code == 200, response.text

@@ -42,6 +42,38 @@ def enqueue_research(research_id: int) -> str:
     return job.id
 
 
+def enqueue_podcast(run_id: int) -> str:
+    from app.tasks.podcast_tasks import run_podcast_task
+
+    job = research_queue.enqueue(
+        run_podcast_task, run_id,
+        job_timeout=max(settings.MAX_TASK_EXECUTION_TIME, 1200),
+        result_ttl=3600, failure_ttl=86400,
+    )
+    return job.id
+
+
+def enqueue_podcast_audio(run_id: int) -> str:
+    from app.tasks.podcast_audio_tasks import run_podcast_audio_task
+
+    job = research_queue.enqueue(
+        run_podcast_audio_task, run_id,
+        job_timeout=3600, result_ttl=3600, failure_ttl=86400,
+    )
+    return job.id
+
+
+def enqueue_theme_search(search_id: int) -> str:
+    from app.tasks.theme_search_tasks import run_theme_search_task
+
+    job = research_queue.enqueue(
+        run_theme_search_task, search_id,
+        job_timeout=max(settings.MAX_TASK_EXECUTION_TIME, 1200),
+        result_ttl=3600, failure_ttl=86400,
+    )
+    return job.id
+
+
 def get_job_status(job_id: str) -> dict:
     """
     Get the status of a job.

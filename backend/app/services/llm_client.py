@@ -233,6 +233,10 @@ Respond in JSON:
         source_summary = "\n".join([
             f"- {st}: {count}" for st, count in source_counts.items()
         ])
+        evidence_summary = "\n".join(
+            f"- {s.get('title', '')}: {s.get('summary', '')[:400]}"
+            for s in sources if s.get("title")
+        )
 
         prompt = f"""Assess whether the collected materials are sufficient to produce a quality book podcast episode.
 
@@ -244,6 +248,8 @@ Theme Matches:
 Source Breakdown:
 {source_summary}
 Total unique sources: {len(sources)}
+Source descriptions (Gutenberg excerpts are partial text, not the full book):
+{evidence_summary or 'No source descriptions available.'}
 
 Requirements for a podcast episode:
 1. Book identity must be clear

@@ -1,6 +1,7 @@
 """Research orchestrator - coordinates the entire research workflow."""
 
 import asyncio
+import logging
 from typing import Dict, Any, Optional, Callable
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -14,7 +15,12 @@ from app.models.research import (
 from app.services.theme_screener import ThemeScreenerService
 from app.services.material_searcher import MaterialSearcherService
 from app.services.llm_client import LLMClient
+from app.services.goodreads import search_reviews as search_goodreads_reviews
+from app.services.book_sources import open_library_book, gutenberg_excerpts
+from app.services.research_agents import run_specialist
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class ResearchOrchestrator:
@@ -82,14 +88,30 @@ class ResearchOrchestrator:
             research.status = "running"
             await self.db.commit()
 
+            async def catalog_agent(payload):
+                return await open_library_book(payload["title"], payload["author"])
+
+            try:
+                catalog = await asyncio.wait_for(run_specialist(
+                    "catalog_agent", "核对书籍身份并收集图书馆资料",
+                    {"title": book.title, "author": book.author}, catalog_agent,
+                ), timeout=45)
+            except Exception as error:
+                logger.warning("Open Library unavailable: %s", type(error).__name__)
+                catalog = None
+
             # Step 1: Theme screening (20%)
             await self._update_progress(research, 0.1, "Screening themes")
 
-            theme_matches = await self.theme_screener.screen_book_for_themes(
-                book_title=book.title,
-                book_author=book.author,
-                book_description=book.description,
-                themes=research.themes,
+            async def theme_agent(payload):
+                return await self.theme_screener.screen_book_for_themes(
+                    book_title=payload["title"], book_author=payload["author"],
+                    book_description=payload["description"], themes=payload["themes"],
+                )
+
+            theme_matches = await run_specialist(
+                "theme_agent", "基于证据筛选主题", {"title": book.title, "author": book.author,
+                "description": book.description or (catalog or {}).get("description"), "themes": research.themes}, theme_agent,
             )
 
             # Save theme matches
@@ -116,22 +138,37 @@ class ResearchOrchestrator:
                 theme_matches, research.match_mode
             )
 
-            if not is_candidate:
-                pending = any(tm["status"] == "pending" for tm in theme_matches)
-                research.overall_assessment = SufficiencyLevel.NEEDS_REVIEW if pending else SufficiencyLevel.NO_THEME_EVIDENCE
-                research.assessment_reasoning = "部分主题证据不足，需进一步核实。" if pending else "当前检索资料未显示足够的主题匹配证据。"
-                research.status = "completed"
-                research.completed_at = datetime.utcnow()
-                await self.db.commit()
-                return {"status": "completed", "assessment": research.overall_assessment.value}
-
+            # A theme mismatch is a research finding, not a reason to skip
+            # general book materials needed for a separate review.
             # Step 2: Search for materials (40%)
             await self._update_progress(research, 0.3, "Searching for materials")
 
-            search_results = await self.material_searcher.search_materials(
-                book_title=book.title,
-                book_author=book.author,
-                themes=research.themes,
+            async def discovery_agent(payload):
+                web, readers, text = await asyncio.gather(
+                    self.material_searcher.search_materials(book_title=payload["title"], book_author=payload["author"], themes=payload["themes"]),
+                    search_goodreads_reviews(payload["title"], payload["author"]),
+                    gutenberg_excerpts(payload["title"], payload["gutenberg_ids"]),
+                    return_exceptions=True,
+                )
+                if isinstance(web, Exception):
+                    raise web
+                if isinstance(readers, Exception):
+                    logger.warning("Goodreads reader reviews unavailable: %s", type(readers).__name__)
+                    readers = []
+                if isinstance(text, Exception):
+                    logger.warning("Gutenberg excerpts unavailable: %s", type(text).__name__)
+                    text = None
+                results = web[:20] + [dict(r, goodreads_review=True) for r in readers]
+                if payload.get("catalog"):
+                    results.append(dict(payload["catalog"], book_source_kind="catalog"))
+                if text:
+                    results.append(dict(text, book_source_kind="excerpt"))
+                return results
+
+            search_results = await run_specialist(
+                "discovery_agent", "收集专业书评、读者反馈与原文节选",
+                {"title": book.title, "author": book.author, "themes": research.themes,
+                 "gutenberg_ids": (catalog or {}).get("gutenberg_ids", []), "catalog": catalog}, discovery_agent,
             )
 
             await self._update_progress(
@@ -141,11 +178,11 @@ class ResearchOrchestrator:
 
             # Step 3: Fetch and classify sources (70%)
             sources_data = []
-            for idx, result in enumerate(search_results[:20]):  # Limit to top 20
-                progress = 0.4 + (idx / min(20, len(search_results))) * 0.3
+            for idx, result in enumerate(search_results):
+                progress = 0.4 + (idx / len(search_results)) * 0.3
                 await self._update_progress(
                     research, progress,
-                    f"Analyzing source {idx+1}/{min(20, len(search_results))}"
+                    f"Analyzing source {idx+1}/{len(search_results)}"
                 )
 
                 # Create source record
@@ -158,6 +195,33 @@ class ResearchOrchestrator:
                 )
                 self.db.add(source)
                 await self.db.commit()  # Get source ID
+
+                # Goodreads supplies the individual review text directly.
+                if result.get("goodreads_review"):
+                    source.source_type = SourceType.READER_REVIEW
+                    source.source_classification_reasoning = "Goodreads 用户发布的读者评论"
+                    source.is_about_target_book = True
+                    source.book_identity_reasoning = "书名和作者与 Goodreads 图书记录匹配"
+                    source.fetch_status = "fetched"
+                    source.fetched_at = datetime.utcnow()
+                    source.raw_content = result["content"][:10000]
+                    source.cleaned_content = result["content"][:5000]
+                    await self.db.commit()
+                    continue
+
+                if result.get("book_source_kind"):
+                    is_catalog = result["book_source_kind"] == "catalog"
+                    source.source_type = SourceType.ENCYCLOPEDIA if is_catalog else SourceType.OTHER
+                    source.source_classification_reasoning = "图书馆书目信息" if is_catalog else "公版书原文节选，并非完整正文"
+                    source.is_about_target_book = True
+                    source.book_identity_reasoning = "已核对作品书名和作者"
+                    source.fetch_status = "fetched"
+                    source.fetched_at = datetime.utcnow()
+                    source.raw_content = result["content"][:15000]
+                    source.cleaned_content = result["content"][:15000]
+                    source.summary = result.get("description") if is_catalog else f"原文共约 {result['total_chars']} 字符，本研究取得 {result['excerpt_count']} 段节选，并非全文。"
+                    await self.db.commit()
+                    continue
 
                 # Fetch full content
                 content, error = await self.material_searcher.fetch_content(result["url"])
@@ -261,16 +325,30 @@ class ResearchOrchestrator:
             ]
 
             source_data = [
-                {"source_type": s.source_type.value}
+                {"source_type": s.source_type.value, "title": s.title,
+                 "summary": (s.summary or "")[:400]}
                 for s in unique_sources
             ]
 
-            assessment_result = await self.llm_client.assess_material_sufficiency(
-                book_title=book.title,
-                book_author=book.author,
-                theme_matches=theme_data,
-                sources=source_data,
-            )
+            async def editor_agent(payload):
+                return await self.llm_client.assess_material_sufficiency(
+                    book_title=payload["title"], book_author=payload["author"],
+                    theme_matches=payload["themes"], sources=payload["sources"],
+                )
+
+            if is_candidate:
+                assessment_result = await run_specialist(
+                    "editor_agent", "评估证据和研究资料缺口",
+                    {"title": book.title, "author": book.author, "themes": theme_data, "sources": source_data}, editor_agent,
+                )
+            else:
+                pending = any(tm["status"] == "pending" for tm in theme_matches)
+                assessment_result = {
+                    "overall_assessment": "needs_review" if pending else "no_theme_evidence",
+                    "reasoning": ("部分主题证据不足，需进一步核实。" if pending else "当前检索资料未显示足够的主题匹配证据。") + " 已继续收集图书资料供一般书评使用。",
+                    "material_gaps": ["指定主题的匹配证据不足"],
+                    "suggested_searches": [],
+                }
 
             # Create material assessment
             material_assessment = MaterialAssessment(

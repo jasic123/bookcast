@@ -17,6 +17,8 @@ from app.models.research import Research, ThemeMatch, Source, SourceType, Review
 from app.models.book import Book
 from app.schemas.research import ResearchCreate, ResearchResponse
 from app.services.llm_client import LLMClient
+from app.services.research_agents import run_specialist
+from app.services.review_pipeline import curate_review_sources, parse_model_json
 
 router = APIRouter(prefix="/research", tags=["research"])
 logger = logging.getLogger(__name__)
@@ -166,31 +168,64 @@ async def create_review_article(research_id: int, db: AsyncSession = Depends(get
     if research.status != "completed":
         raise HTTPException(status_code=400, detail="研究完成后才能生成综合书评。")
     cached = await db.get(ReviewArticle, research_id)
-    if cached and cached.article.get("version") == 3:
+    if cached and cached.article.get("version") == 5:
         return cached.article
     digest = await db.get(ReviewDigest, research_id)
-    if not digest or not digest.reviews:
-        raise HTTPException(status_code=400, detail="请先完成书评整理；可用书评不足时无法生成。")
     book = await db.get(Book, research.book_id)
-    sources = digest.reviews[:12]
-    permitted = {str(item["source_id"]): item for item in sources}
+    sources = (digest.reviews if digest else [])[:12]
+    book_materials = (await db.execute(select(Source).where(
+        Source.research_id == research_id, Source.is_duplicate == 0,
+        Source.is_about_target_book == 1, Source.fetch_status == "fetched",
+        (Source.title.like("Open Library 图书资料：%") | Source.title.like("Project Gutenberg 原文节选：%")),
+    ).order_by(Source.id))).scalars().all()
+    sources += [{"source_id": row.id, "title": row.title, "url": row.url, "basis": "page",
+                 "summary": row.summary or "已核实书籍的图书馆信息。", "points": []} for row in book_materials]
+    supplemental = (await db.execute(select(Source).where(
+        Source.research_id == research_id, Source.is_duplicate == 0, Source.is_about_target_book == 1,
+        Source.source_type.in_([SourceType.PUBLISHER_DESCRIPTION, SourceType.ENCYCLOPEDIA, SourceType.NEWS_ARTICLE, SourceType.OTHER]),
+    ).order_by(Source.id))).scalars().all()
+    known = {item["source_id"] for item in sources}
+    for row in supplemental:
+        if row.id in known or not (row.cleaned_content or row.summary):
+            continue
+        sources.append({"source_id": row.id, "title": row.title, "url": row.url,
+                        "basis": "page" if row.fetch_status == "fetched" else "search_snippet",
+                        "summary": row.summary or row.cleaned_content[:250], "points": [],
+                        "source_type": row.source_type.value})
+        if len(sources) >= 18:
+            break
+    if not sources:
+        raise HTTPException(status_code=400, detail="请先完成书评整理；可用书评或图书资料不足时无法生成。")
     source_rows = (await db.execute(select(Source).where(Source.id.in_([x["source_id"] for x in sources])))).scalars().all()
-    excerpts = {row.id: (row.cleaned_content or "")[:1600] for row in source_rows}
-    payload = {"book": book.title, "author": book.author,
-               "reviews": [{"source_id": x["source_id"], "basis": x["basis"], "summary": x["summary"],
-                            "points": x["points"], "excerpt": excerpts.get(x["source_id"], "")} for x in sources]}
+    excerpts = {row.id: (row.cleaned_content or "")[:14000 if row.title.startswith("Project Gutenberg 原文节选：") else 1600] for row in source_rows}
+    source_types = {row.id: row.source_type.value for row in source_rows}
+    for item in sources:
+        item["source_type"] = source_types.get(item["source_id"], item.get("source_type", "unknown"))
+        item["excerpt"] = excerpts.get(item["source_id"], "")
+    client = LLMClient()
+    considered_count = len(sources)
+    sources, evidence, curation_warnings = await curate_review_sources(
+        client, {"title": book.title, "author": book.author}, sources,
+    )
+    if not sources:
+        raise HTTPException(status_code=400, detail="资料初筛未找到与目标作品相符的可用来源，暂时无法生成书评。")
+    permitted = {str(item["source_id"]): item for item in sources}
+    payload = {"book": book.title, "author": book.author, "evidence": evidence,
+               "reviews": [{"source_id": x["source_id"], "title": x["title"], "source_type": x["source_type"], "basis": x["basis"], "summary": x["summary"],
+                            "points": x["points"], "excerpt": x["excerpt"]} for x in sources]}
     sections = [
         ("作品与背景", "介绍书籍与故事背景，说明已有资料覆盖什么；不要虚构情节。"),
         ("主题与人物", "分析评论中有依据的主题和人物选择，解释其意义；不要推断资料没有支持的细节。"),
         ("写作特色与评论", "比较书评对叙事、人物和写作手法的具体评价；只有资料明确提及才能写批评或分歧。"),
         ("综合评价与讨论", "结合评论总结阅读价值与讨论问题，并明确指出资料不足和需要核实的地方。"),
     ]
-    client = LLMClient()
     async def write_section(section):
         heading, instruction = section
-        prompt = ('你是书评编辑，只使用提供的书评摘要、观点和摘录写中文综合书评的一个章节。'
+        prompt = ('你是书评编辑，只使用提供的书评摘要、图书馆简介和原文节选写中文综合书评的一个章节。'
                   '区分评论意见与事实，避免重复和空话，不要假装读过原书，不得编造情节、引文、评论、分歧或来源。'
-                  '每章必须写两段，每章不少于450个汉字。用具体分析展开观点，比较多个来源的共同点与差异；每段约200至300字。证据不足时明确写出哪些观点无法判断，但仍须具体说明已有来源能支持什么、不能支持什么，禁止用重复套话补字数。'
+                  'Gutenberg 材料是分散的原文节选而不是全书，不能声称已阅读全文或据此编造不在节选中的转折。图书馆简介不属于专业评论。'
+                  '出版社简介和新闻不能说成独立书评；没有专业评论时明确指出，不能虚构专业观点。'
+                  '用适合播客口播的自然中文写作，结合精筛证据具体展开观点，比较有根据的不同看法；资料充分时详细展开，资料不足时明确指出缺口，不得用重复套话凑字数。'
                   '搜索摘要不是原文全文，不能据此声称已读全文。每一段必须列出支持该段的来源 source_id。'
                   '仅输出 JSON 对象：{"paragraphs":[{"text":"一段中文","source_ids":[1,2]}]}，不要输出其他内容；只引用提供的 id。')
         for _ in range(2):
@@ -199,9 +234,7 @@ async def create_review_article(research_id: int, db: AsyncSession = Depends(get
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": json.dumps({"section": heading, "instruction": instruction, **payload}, ensure_ascii=False)},
                 ], temperature=0.2, max_tokens=2200), timeout=90)
-                cleaned = response.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-                cleaned = re.sub(r'([,{]\s*)source_ids\s*:', r'\1"source_ids":', cleaned)
-                data = json.loads(cleaned)
+                data = parse_model_json(response)
                 if not isinstance(data, dict) or not isinstance(data.get("paragraphs"), list):
                     raise ValueError("Invalid section")
                 paragraphs = []
@@ -218,18 +251,28 @@ async def create_review_article(research_id: int, db: AsyncSession = Depends(get
                 return paragraphs
             except Exception as error:
                 logger.warning("Could not generate review section for research %s: %s", research_id, type(error).__name__)
-        summary = "；".join(item["summary"] for item in sources[:5] if item.get("summary"))
-        if not summary:
-            raise ValueError("No source summaries available")
-        source_ids = [item["source_id"] for item in sources[:5] if item.get("summary")]
-        return [{"text": f"本章资料有限，暂不能形成充分的深入分析。现有书评资料提到：{summary}。这些内容只能作为后续阅读和核实的线索。", "source_ids": source_ids, "section": heading}]
-    chunks = await asyncio.gather(*(write_section(section) for section in sections), return_exceptions=True)
+        raise ValueError("Review section generation failed")
+    async def writing_agent(payload):
+        return await write_section((payload["heading"], payload["instruction"]))
+
+    chunks = await asyncio.gather(*(run_specialist(
+        f"podcast_writer_agent_{index}", "基于精筛证据撰写播客风格书评章节",
+        {"heading": heading, "instruction": instruction}, writing_agent,
+    ) for index, (heading, instruction) in enumerate(sections)), return_exceptions=True)
     paragraphs = [part for chunk in chunks if isinstance(chunk, list) for part in chunk]
     if not paragraphs:
         raise HTTPException(status_code=502, detail="综合书评生成失败，请重试。")
+    failed_sections = [heading for (heading, _), chunk in zip(sections, chunks) if not isinstance(chunk, list)]
+    if failed_sections:
+        curation_warnings.append("以下章节生成失败：" + "、".join(failed_sections) + "。请重试。")
     cited_ids = {i for part in paragraphs for i in part["source_ids"]}
-    article = {"version": 3, "title": f"《{book.title}》综合书评", "paragraphs": paragraphs,
+    cited_ids.update(i for finding in evidence.get("findings", []) for i in finding.get("source_ids", []))
+    article = {"version": 5, "title": f"《{book.title}》综合书评", "paragraphs": paragraphs,
+               "warnings": curation_warnings, "incomplete": bool(curation_warnings),
+               "source_review": {"considered": considered_count, "selected": len(sources), **evidence},
                "sources": [{"source_id": item["source_id"], "title": item["title"], "url": item["url"], "basis": item["basis"]} for item in sources if item["source_id"] in cited_ids]}
+    if article["incomplete"]:
+        return article
     if cached:
         cached.article = article
     else:
@@ -239,7 +282,7 @@ async def create_review_article(research_id: int, db: AsyncSession = Depends(get
     except Exception:
         await db.rollback()
         existing = await db.get(ReviewArticle, research_id)
-        if existing and existing.article.get("version") == 3:
+        if existing and existing.article.get("version") == 5:
             return existing.article
         raise
     return article

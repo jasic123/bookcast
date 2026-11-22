@@ -1,5 +1,6 @@
 """Database configuration and session management."""
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
 from app.core.config import settings
@@ -41,3 +42,10 @@ async def init_db():
     """Initialize database - create all tables."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        if engine.dialect.name == 'sqlite':
+            columns = (await conn.execute(text('PRAGMA table_info(podcast_runs)'))).all()
+            existing = {column[1] for column in columns}
+            for name, kind in {'audio_status': 'VARCHAR(30)', 'audio_step': 'VARCHAR(100)',
+                               'audio_error': 'TEXT', 'audio_voices': 'JSON'}.items():
+                if name not in existing:
+                    await conn.execute(text(f'ALTER TABLE podcast_runs ADD COLUMN {name} {kind}'))
