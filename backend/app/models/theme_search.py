@@ -11,6 +11,7 @@ class ThemeSearch(Base):
     theme = Column(String(200), nullable=False)
     limit = Column(Integer, nullable=False, default=10)
     status = Column(String(30), nullable=False, default='queued')
+    job_id = Column(String(64), nullable=True)
     current_step = Column(String(100), nullable=True)
     book_list_id = Column(Integer, ForeignKey('book_lists.id'), nullable=True)
     error_message = Column(Text, nullable=True)

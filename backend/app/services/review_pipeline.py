@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 def parse_model_json(text):
     """Repair common missing JSON-key quotes without accepting arbitrary code."""
     text = text.strip().removeprefix('```json').removeprefix('```').removesuffix('```').strip()
-    text = re.sub(r'([,{]\s*)"?(paragraphs|text|source_ids|keep|findings|gaps|kind|approved|issues|summary|outline|title|minutes|focus|premise|host|guest|books|author|reason|evidence_quote|english_theme|queries|match_type|authors|foreign|country|source_id|quote)"?\s*:', r'\1"\2":', text)
+    text = re.sub(r'([,{]\s*)"?(paragraphs|text|source_ids|keep|findings|gaps|kind|approved|issues|summary|outline|title|minutes|focus|premise|host|guest|books|author|reason|evidence_quote|english_theme|queries|match_type|authors|foreign|country|source_id|quote|source_type|reasoning|is_about_target|identity_reasoning|key_points|status|evidence|source_indices|suggested_themes|overall_assessment|material_gaps|suggested_searches)"?\s*:', r'\1"\2":', text)
     start = text.find('{')
     if start < 0:
         raise ValueError('No JSON object in model response')

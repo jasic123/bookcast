@@ -71,7 +71,7 @@ export interface Source {
   is_duplicate: boolean
   duplicate_of: number | null
   relevance_score: number | null
-  is_about_target_book: boolean
+  is_about_target_book: boolean | null
   book_identity_reasoning: string | null
   created_at: string
 }

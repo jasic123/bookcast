@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { themeSearchApi } from '../services/api'
+import { healthApi, themeSearchApi } from '../services/api'
 import type { ThemeSearch } from '../services/api'
 
 export default function ThemeSearchPage() {
@@ -21,10 +21,17 @@ export default function ThemeSearchPage() {
   useEffect(() => {
     if (!result || !['queued', 'running'].includes(result.status)) return
     let active = true
-    const timer = window.setInterval(() => {
-      themeSearchApi.get(result.id).then((value) => { if (active) setResult(value) }).catch(() => { if (active) setError('获取找书进度失败，请刷新后重试。') })
-    }, 3000)
-    return () => { active = false; window.clearInterval(timer) }
+    let timer: number
+    const poll = async () => {
+      try {
+        const value = await themeSearchApi.get(result.id)
+        if (active) setResult(value)
+      } catch { /* health check below gives an actionable error */ }
+      const issue = await healthApi.checkQueue('research')
+      if (active) { setError(issue); timer = window.setTimeout(poll, 3000) }
+    }
+    timer = window.setTimeout(poll, 3000)
+    return () => { active = false; window.clearTimeout(timer) }
   }, [result?.id, result?.status])
 
   const busy = loading || !!result && ['queued', 'running'].includes(result.status)

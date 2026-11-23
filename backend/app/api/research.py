@@ -12,7 +12,7 @@ import asyncio
 import logging
 
 from app.core.database import get_db
-from app.core.queue import enqueue_research, get_job_status
+from app.core.queue import creation_guard, enqueue_research, get_job_status
 from app.models.research import Research, ThemeMatch, Source, SourceType, ReviewDigest, ReviewArticle
 from app.models.book import Book
 from app.schemas.research import ResearchCreate, ResearchResponse
@@ -49,25 +49,29 @@ async def create_research(
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
 
-    # Create research
-    research = Research(
-        book_id=request.book_id,
-        themes=request.themes,
-        match_mode=request.match_mode,
-        status="queued",
-    )
-    db.add(research)
-    await db.commit()
-    await db.refresh(research)
-
-    # Enqueue research task in RQ
     try:
-        job_id = enqueue_research(research.id)
+        async with creation_guard(f'research:{request.book_id}'):
+            existing = (await db.execute(select(Research).where(
+                Research.book_id == request.book_id, Research.status.in_(['queued', 'running']),
+            ).order_by(Research.id.desc()).limit(1))).scalar_one_or_none()
+            if existing:
+                raise HTTPException(status_code=409, detail={'message': '这本书已有进行中的研究任务。', 'research_id': existing.id})
+            research = Research(book_id=request.book_id, themes=request.themes,
+                                match_mode=request.match_mode, status='queued')
+            db.add(research)
+            await db.commit()
+            await db.refresh(research)
+            try:
+                job_id = enqueue_research(research.id)
+            except RedisError:
+                research.status = 'failed'
+                research.error_message = '无法连接任务队列，请检查 Redis 服务。'
+                await db.commit()
+                raise HTTPException(status_code=503, detail=research.error_message)
+    except TimeoutError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except RedisError:
-        research.status = "failed"
-        research.error_message = "无法连接任务队列，请检查 Redis 服务。"
-        await db.commit()
-        raise HTTPException(status_code=503, detail=research.error_message)
+        raise HTTPException(status_code=503, detail='无法连接任务队列，请检查 Redis 服务。')
 
     return {
         "research_id": research.id,

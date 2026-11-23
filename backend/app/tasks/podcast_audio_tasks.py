@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.database import engine
 from app.models.podcast_run import PodcastRun
-from app.services.podcast_audio import render_audio
+from app.services.podcast_audio import render_audio, speaker_labels
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,9 @@ async def _run_podcast_audio_async(run_id):
                 await db.commit()
 
             draft = (run.result or {}).get('drafts', [])[-1]['content']
-            await render_audio(draft, run_id, voices=run.audio_voices, on_step=on_step)
+            speakers = speaker_labels((run.request or {}).get('speaker_count', 2))
+            audio_path = await render_audio(draft, run_id, voices=run.audio_voices, speakers=speakers, on_step=on_step)
+            run.audio_file = audio_path.name
             run.audio_status = 'completed'
             run.audio_step = '音频已生成'
             await db.commit()

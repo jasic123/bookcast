@@ -44,6 +44,10 @@ echo "🔧 启动 RQ Worker..."
 cd backend
 python worker.py &
 WORKER_PID=$!
+python worker.py --queue podcast &
+PODCAST_WORKER_PID=$!
+python worker.py --queue audio &
+AUDIO_WORKER_PID=$!
 cd ..
 
 # 启动前端
@@ -63,6 +67,6 @@ echo ""
 echo "⏹️  停止服务: Ctrl+C"
 
 # 等待用户中断
-trap "echo ''; echo '🛑 正在停止所有服务...'; kill $BACKEND_PID $WORKER_PID $FRONTEND_PID 2>/dev/null; exit 0" INT
+trap "echo ''; echo '🛑 正在停止所有服务...'; kill $BACKEND_PID $WORKER_PID $PODCAST_WORKER_PID $AUDIO_WORKER_PID $FRONTEND_PID 2>/dev/null; exit 0" INT
 
 wait

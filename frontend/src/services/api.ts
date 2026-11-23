@@ -8,8 +8,9 @@ import type {
 
 export type PodcastRun = {
   id: number; research_id: number; status: 'queued' | 'running' | 'completed' | 'needs_revision' | 'failed';
+  speaker_count: number; speakers: string[];
   current_step: string | null; error_message: string | null;
-  audio_status: 'queued' | 'running' | 'completed' | 'failed' | null; audio_step: string | null; audio_error: string | null; audio_url: string | null; audio_voices: { 主持人: string; 嘉宾: string } | null;
+  audio_status: 'queued' | 'running' | 'completed' | 'failed' | null; audio_step: string | null; audio_error: string | null; audio_url: string | null; audio_voices: Record<string, string> | null;
   result: null | { plan: { premise: string; outline: Array<{ title: string; minutes: number; focus: string }> }; evidence: { gaps: string[] }; warnings: string[]; drafts: Array<{ iteration: number; content: string }>; reviews: Array<{ iteration: number; approved: boolean; issues: string[]; summary: string; estimated_minutes: number }>; sources: Array<{ source_id: number; title: string; url: string; source_type: string }> }
 }
 
@@ -26,11 +27,41 @@ const api = axios.create({
   },
 })
 
+export const healthApi = {
+  checkQueue: async (queue: 'research' | 'podcast' | 'audio'): Promise<string | null> => {
+    try {
+      const response = await api.get('/health/deep', { timeout: 5000, validateStatus: () => true })
+      const checks = response.data?.checks
+      if (!checks) return '后端不可用，请检查 API 服务。'
+      if (!checks.database?.ok) return '数据库不可用，请检查数据库服务。'
+      if (!checks.redis?.ok) return '任务队列不可用，请检查 Redis。'
+      if (checks.workers?.missing?.includes(queue)) return `任务队列不可用，请启动 ${queue} Worker。`
+      return null
+    } catch {
+      return '后端不可用，请检查 API 服务。'
+    }
+  },
+}
+
+export type VoiceDefaults = { 主持人: string; 嘉宾: string }
+export const configApi = {
+  get: async (): Promise<{ default_voices: VoiceDefaults }> => (await api.get('/config')).data,
+}
+
 export const podcastApi = {
-  create: async (data: { research_id: number; theme: string; duration: number; style: string; audience: string; reference_text: string }): Promise<PodcastRun> => (await api.post('/podcasts/', data)).data,
+  create: async (data: { research_id: number; speaker_count: number; theme: string; duration: number; style: string; audience: string; reference_text: string }): Promise<PodcastRun> => (await api.post('/podcasts/', data)).data,
   get: async (id: number): Promise<PodcastRun> => (await api.get(`/podcasts/${id}`)).data,
+  retry: async (id: number): Promise<PodcastRun> => (await api.post(`/podcasts/${id}/retry`)).data,
   latest: async (researchId: number): Promise<PodcastRun | null> => (await api.get(`/podcasts/research/${researchId}`)).data,
-  createAudio: async (id: number, host_voice: string, guest_voice: string, accept_review_issues: boolean): Promise<PodcastRun> => (await api.post(`/podcasts/${id}/audio`, { host_voice, guest_voice, accept_review_issues })).data,
+  createAudio: async (id: number, voices: Record<string, string>, accept_review_issues: boolean): Promise<PodcastRun> => (await api.post(`/podcasts/${id}/audio`, { voices, accept_review_issues })).data,
+  uploadVoice: async (sample: File, transcript: string, name: string): Promise<{ voice_id: string }> => {
+    const form = new FormData()
+    form.append('sample', sample)
+    form.append('transcript', transcript)
+    form.append('name', name)
+    form.append('consent', 'true')
+    return (await api.post('/podcasts/voices', form, { headers: { 'Content-Type': undefined }, timeout: 120000 })).data
+  },
 }
 
 export const themeSearchApi = {

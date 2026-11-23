@@ -239,13 +239,22 @@ class ResearchOrchestrator:
 
                 # Classify and analyze
                 if content_to_analyze:
-                    classification = await self.material_searcher.classify_and_analyze_source(
-                        source_title=source.title,
-                        source_url=source.url,
-                        content=content_to_analyze,
-                        book_title=book.title,
-                        book_author=book.author,
-                    )
+                    try:
+                        classification = await self.material_searcher.classify_and_analyze_source(
+                            source_title=source.title,
+                            source_url=source.url,
+                            content=content_to_analyze,
+                            book_title=book.title,
+                            book_author=book.author,
+                        )
+                    except ValueError as error:
+                        logger.warning('Source %s classification parse failed: %s', source.id, error)
+                        source.fetch_status = 'parse_failed'
+                        source.fetch_error = str(error)[:200]
+                        source.is_about_target_book = None
+                        source.cleaned_content = content_to_analyze
+                        await self.db.commit()
+                        continue
 
                     try:
                         source.source_type = SourceType(classification.get("source_type", "other"))

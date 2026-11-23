@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
-import { booksApi, researchApi } from '../services/api'
+import { booksApi, healthApi, researchApi } from '../services/api'
 import type { Book, Research } from '../types'
 import PodcastPanel from './PodcastPanel'
 
@@ -18,6 +18,7 @@ export default function ResearchPage() {
   const [reviewsError, setReviewsError] = useState(false)
   const [reviewsAttempt, setReviewsAttempt] = useState(0)
   const [loading, setLoading] = useState(false)
+  const creating = useRef(false)
   const [error, setError] = useState<string | null>(null)
 
   // Create research form
@@ -37,25 +38,47 @@ export default function ResearchPage() {
   useEffect(() => {
     if (!jobId) return
 
-    const interval = setInterval(async () => {
+    let active = true
+    let timer: number
+    const poll = async () => {
       try {
         const status = await researchApi.getJobStatus(jobId)
+        if (!active) return
         setJobStatus(status.status)
 
         if (status.status === 'finished' || status.status === 'failed') {
-          clearInterval(interval)
           if (bookId) {
             loadResearches(parseInt(bookId))
           }
           setJobId(null)
+          return
         }
       } catch (err) {
         console.error('Failed to get job status:', err)
       }
-    }, 2000)
+      const issue = await healthApi.checkQueue('research')
+      if (active) { setError(issue); timer = window.setTimeout(poll, 2000) }
+    }
+    timer = window.setTimeout(poll, 2000)
 
-    return () => clearInterval(interval)
+    return () => { active = false; window.clearTimeout(timer) }
   }, [jobId, bookId])
+
+  useEffect(() => {
+    if (jobId || !currentResearch || !['queued', 'running'].includes(currentResearch.status)) return
+    let active = true
+    let timer: number
+    const poll = async () => {
+      try {
+        const value = await researchApi.getResearch(currentResearch.id)
+        if (active) setCurrentResearch(value)
+      } catch { /* health check below explains the failure */ }
+      const issue = await healthApi.checkQueue('research')
+      if (active) { setError(issue); timer = window.setTimeout(poll, 3000) }
+    }
+    timer = window.setTimeout(poll, 3000)
+    return () => { active = false; window.clearTimeout(timer) }
+  }, [jobId, currentResearch?.id, currentResearch?.status])
 
   useEffect(() => {
     if (!currentResearch || currentResearch.status !== 'completed') return
@@ -111,11 +134,13 @@ export default function ResearchPage() {
   }
 
   const handleCreateResearch = async () => {
+    if (creating.current) return
     if (!bookId || !themes.trim()) {
       setError('请输入至少一个主题')
       return
     }
 
+    creating.current = true
     setLoading(true)
     setError(null)
 
@@ -131,8 +156,11 @@ export default function ResearchPage() {
       setJobStatus('queued')
       setThemes('')
     } catch (err: any) {
-      setError(err.response?.data?.detail || '创建研究任务失败')
+      const detail = err.response?.data?.detail
+      setError(typeof detail === 'object' ? `${detail.message}（任务 #${detail.research_id}）` : detail || '创建研究任务失败')
+      if (err.response?.status === 409 && bookId) loadResearches(parseInt(bookId))
     } finally {
+      creating.current = false
       setLoading(false)
     }
   }
@@ -541,7 +569,7 @@ export default function ResearchPage() {
                           ? '已获取网页文本（可能不完整）'
                           : source.fetch_status === 'failed'
                           ? source.summary ? '原网页未获取，使用搜索摘要' : '原网页未获取，无可用摘要'
-                          : source.fetch_status}
+                          : source.fetch_status === 'parse_failed' ? '资料已获取，分类解析失败，需人工核对' : source.fetch_status}
                       </span>
                       {source.relevance_score !== null && (
                         <span>
@@ -551,14 +579,15 @@ export default function ResearchPage() {
                       {source.is_duplicate && (
                         <span className="text-orange-600">重复内容</span>
                       )}
-                      {!source.is_about_target_book && (
+                      {source.is_about_target_book === false && (
                         <span className="text-red-600">非目标书籍</span>
                       )}
                     </div>
 
                     {source.fetch_error && (
                       <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded text-xs text-red-700">
-                        原网页未获取：{source.fetch_error}。{source.summary ? '已使用搜索摘要，内容需核实。' : '可尝试打开来源链接。'}
+                        {source.fetch_status === 'parse_failed' ? '分类解析失败，资料仍保留：' : '原网页未获取：'}{source.fetch_error}。
+                        {source.fetch_status !== 'parse_failed' && (source.summary ? '已使用搜索摘要，内容需核实。' : '可尝试打开来源链接。')}
                       </div>
                     )}
                   </div>

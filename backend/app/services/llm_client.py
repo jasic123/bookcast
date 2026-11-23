@@ -1,8 +1,25 @@
 """LLM client wrapper for OpenAI-compatible APIs."""
 
+import asyncio
 from openai import AsyncOpenAI
+from pydantic import BaseModel, StrictBool, ValidationError
+from typing import Literal
+import logging
 from typing import List, Dict, Any, Optional
 from app.core.config import settings
+from app.services.review_pipeline import parse_model_json
+
+
+logger = logging.getLogger(__name__)
+
+
+class SourceClassification(BaseModel):
+    source_type: Literal['professional_review', 'reader_review', 'publisher_description', 'author_interview', 'news_article', 'encyclopedia', 'other', 'irrelevant']
+    reasoning: str
+    is_about_target: StrictBool
+    identity_reasoning: str
+    summary: str
+    key_points: List[str]
 
 
 class LLMClient:
@@ -12,6 +29,8 @@ class LLMClient:
         self.client = AsyncOpenAI(
             api_key=settings.LLM_API_KEY,
             base_url=settings.LLM_BASE_URL,
+            timeout=60,
+            max_retries=2,
         )
         self.model = settings.LLM_MODEL
         self.max_tokens = settings.LLM_MAX_TOKENS
@@ -34,12 +53,12 @@ class LLMClient:
         Returns:
             Response content as string
         """
-        response = await self.client.chat.completions.create(
+        response = await asyncio.wait_for(self.client.chat.completions.create(
             model=self.model,
             messages=messages,
-            temperature=temperature or self.temperature,
-            max_tokens=max_tokens or self.max_tokens,
-        )
+            temperature=temperature if temperature is not None else self.temperature,
+            max_tokens=max_tokens if max_tokens is not None else self.max_tokens,
+        ), timeout=190)
         return response.choices[0].message.content
 
     async def analyze_theme_match(
@@ -104,11 +123,10 @@ Respond in JSON format:
         response = await self.chat_completion(messages, temperature=0.3)
 
         # Parse JSON response
-        import json
         try:
-            result = json.loads(response.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip())
+            result = parse_model_json(response)
             return result if isinstance(result, dict) else {}
-        except json.JSONDecodeError:
+        except (ValueError, TypeError):
             # Fallback if LLM doesn't return valid JSON
             return {
                 "status": "pending",
@@ -182,23 +200,17 @@ Respond in JSON:
             {"role": "user", "content": prompt}
         ]
 
-        response = await self.chat_completion(messages, temperature=0.2)
-
-        import json
-        try:
-            result = json.loads(response.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip())
-            if not isinstance(result, dict):
-                raise ValueError("Invalid classification")
-            return result
-        except (json.JSONDecodeError, ValueError):
-            return {
-                "source_type": "other",
-                "reasoning": "Classification incomplete",
-                "is_about_target": False,
-                "identity_reasoning": "Unable to verify",
-                "summary": content[:200],
-                "key_points": []
-            }
+        for attempt in range(2):
+            response = await self.chat_completion(messages, temperature=0.2)
+            try:
+                result = parse_model_json(response)
+                if isinstance(result, dict) and 'source_type' not in result and len(result) == 1:
+                    result = next(iter(result.values()))
+                return SourceClassification.model_validate(result).model_dump()
+            except (ValueError, TypeError, ValidationError) as error:
+                logger.warning('Source classification parse failed for %s (attempt %s): %s; response=%r',
+                               source_url, attempt + 1, type(error).__name__, response[:500])
+        raise ValueError(f'来源分类解析失败：{source_url}')
 
     async def assess_material_sufficiency(
         self,
@@ -279,11 +291,10 @@ Respond in JSON:
 
         response = await self.chat_completion(messages, temperature=0.3)
 
-        import json
         try:
-            result = json.loads(response.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip())
+            result = parse_model_json(response)
             return result
-        except json.JSONDecodeError:
+        except (ValueError, TypeError):
             return {
                 "overall_assessment": "needs_review",
                 "reasoning": "Assessment incomplete",

@@ -42,6 +42,8 @@ timeout /t 3 /nobreak >nul
 
 REM 启动 RQ Worker
 start "RQ Worker" cmd /k "cd backend && conda activate book-podcast && python worker.py"
+start "Podcast Worker" cmd /k "cd backend && conda activate book-podcast && python worker.py --queue podcast"
+start "Audio Worker" cmd /k "cd backend && conda activate book-podcast && python worker.py --queue audio"
 
 REM 启动前端
 start "Frontend" cmd /k "cd frontend && npm run dev"

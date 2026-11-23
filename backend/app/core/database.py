@@ -10,6 +10,7 @@ engine = create_async_engine(
     settings.DATABASE_URL,
     echo=settings.DEBUG,
     future=True,
+    connect_args={"timeout": 30} if settings.DATABASE_URL.startswith("sqlite") else {},
 )
 
 # Create async session factory
@@ -40,12 +41,21 @@ async def get_db() -> AsyncSession:
 
 async def init_db():
     """Initialize database - create all tables."""
+    if engine.dialect.name == 'sqlite':
+        async with engine.connect() as conn:
+            await conn.execute(text('PRAGMA journal_mode=WAL'))
+            await conn.execute(text('PRAGMA synchronous=NORMAL'))
+            await conn.commit()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         if engine.dialect.name == 'sqlite':
             columns = (await conn.execute(text('PRAGMA table_info(podcast_runs)'))).all()
             existing = {column[1] for column in columns}
             for name, kind in {'audio_status': 'VARCHAR(30)', 'audio_step': 'VARCHAR(100)',
-                               'audio_error': 'TEXT', 'audio_voices': 'JSON'}.items():
+                               'audio_error': 'TEXT', 'audio_voices': 'JSON',
+                               'audio_file': 'VARCHAR(150)'}.items():
                 if name not in existing:
                     await conn.execute(text(f'ALTER TABLE podcast_runs ADD COLUMN {name} {kind}'))
+            theme_columns = (await conn.execute(text('PRAGMA table_info(theme_searches)'))).all()
+            if 'job_id' not in {column[1] for column in theme_columns}:
+                await conn.execute(text('ALTER TABLE theme_searches ADD COLUMN job_id VARCHAR(64)'))

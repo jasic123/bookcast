@@ -19,5 +19,6 @@ class PodcastRun(Base):
     audio_step = Column(String(100), nullable=True)
     audio_error = Column(Text, nullable=True)
     audio_voices = Column(JSON, nullable=True)
+    audio_file = Column(String(150), nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     completed_at = Column(DateTime, nullable=True)

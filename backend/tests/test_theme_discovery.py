@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.core.config import settings
 from app.core.database import Base, get_db
@@ -110,7 +110,8 @@ def test_theme_search_api_queues_and_checks_input():
                 yield db
         app.dependency_overrides[get_db] = test_db
         try:
-            with patch('app.api.theme_search.enqueue_theme_search', return_value='job') as enqueue:
+            with patch('app.api.theme_search.enqueue_theme_search', return_value='job') as enqueue, \
+                    patch('app.api.theme_search._job_is_active', return_value=True):
                 async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
                     response = await client.post('/api/theme-search/', json={'theme': '  死亡  ', 'limit': 10})
                     assert response.status_code == 200, response.text
@@ -122,6 +123,58 @@ def test_theme_search_api_queues_and_checks_input():
         finally:
             app.dependency_overrides.pop(get_db, None)
             await engine.dispose()
+    asyncio.run(check())
+
+
+def test_lost_theme_search_job_becomes_retryable():
+    from app.models.theme_search import ThemeSearch
+
+    async def check():
+        engine = create_async_engine('sqlite+aiosqlite:///:memory:')
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as db:
+            search = ThemeSearch(theme='爱情', limit=10, status='queued', job_id='lost-job')
+            db.add(search)
+            await db.commit()
+            search_id = search.id
+
+        async def test_db():
+            async with sessions() as db:
+                yield db
+
+        app.dependency_overrides[get_db] = test_db
+        try:
+            with patch('app.api.theme_search._job_is_active', return_value=False):
+                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+                    response = await client.get(f'/api/theme-search/{search_id}')
+                    assert response.status_code == 200
+                    assert response.json()['status'] == 'failed'
+                    assert '重新搜索' in response.json()['error_message']
+            async with sessions() as db:
+                assert (await db.get(ThemeSearch, search_id)).status == 'failed'
+        finally:
+            app.dependency_overrides.pop(get_db, None)
+            await engine.dispose()
+
+    asyncio.run(check())
+
+
+def test_existing_theme_search_table_gains_job_id():
+    from app.core import database
+
+    async def check():
+        engine = create_async_engine('sqlite+aiosqlite:///:memory:')
+        async with engine.begin() as conn:
+            await conn.execute(text('CREATE TABLE theme_searches (id INTEGER PRIMARY KEY)'))
+        with patch.object(database, 'engine', engine):
+            await database.init_db()
+        async with engine.connect() as conn:
+            columns = (await conn.execute(text('PRAGMA table_info(theme_searches)'))).all()
+            assert 'job_id' in {column[1] for column in columns}
+        await engine.dispose()
+
     asyncio.run(check())
 
 

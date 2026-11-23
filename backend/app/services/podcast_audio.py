@@ -1,43 +1,100 @@
-"""Render two-speaker scripts into a playable WAV episode."""
+"""Render role-labelled scripts into a playable WAV episode."""
 import asyncio
+import audioop
+import hashlib
 import io
+import json
 import re
+import time
+import uuid
 import wave
 from pathlib import Path
 
-from openai import AsyncOpenAI
+import httpx
+from openai import APIConnectionError, APIStatusError, AsyncOpenAI
 
 from app.core.config import settings
 
 DEFAULT_VOICES = {
-    '主持人': 'FunAudioLLM/CosyVoice2-0.5B:alex',
+    '主持人': 'FunAudioLLM/CosyVoice2-0.5B:bella',
     '嘉宾': 'FunAudioLLM/CosyVoice2-0.5B:anna',
 }
 TTS_BATCH_SIZE = 3
+TTS_TURN_LENGTH = 120
+MAX_VOICE_SAMPLE_BYTES = 10 * 1024 * 1024
+VOICE_SAMPLE_TYPES = {'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav'}
 
 
-def script_segments(script):
-    """Keep every spoken line while splitting long turns at punctuation."""
+def speaker_labels(count: int) -> list[str]:
+    if count not in (1, 2, 3, 4):
+        raise ValueError('播客人数必须为 1–4 人。')
+    if count == 1:
+        return ['主持人']
+    if count == 2:
+        return ['主持人', '嘉宾']
+    return ['主持人'] + [f'嘉宾{index}' for index in range(1, count)]
+
+
+async def create_custom_voice(sample: bytes, filename: str, mime_type: str, transcript: str, name: str, *, client=None):
+    """Send an authorized sample to SiliconFlow and return its voice URI."""
+    if not sample or len(sample) > MAX_VOICE_SAMPLE_BYTES or mime_type not in VOICE_SAMPLE_TYPES:
+        raise ValueError('请上传不超过 10 MB 的 MP3 或 WAV 录音。')
+    if not 1 <= len(transcript.strip()) <= 500:
+        raise ValueError('请填写与录音一致的示例文字（最多 500 字）。')
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,30}', name):
+        raise ValueError('音色名称只能使用 1–30 个英文字母、数字、下划线或连字符。')
+    key = settings.TTS_API_KEY or (settings.LLM_API_KEY if 'siliconflow' in settings.LLM_BASE_URL else '')
+    if not key:
+        raise ValueError('请先配置 SiliconFlow 的 TTS_API_KEY。')
+    owns_client = client is None
+    client = client or httpx.AsyncClient(timeout=90)
+    try:
+        response = await client.post(
+            settings.TTS_BASE_URL.rstrip('/') + '/uploads/audio/voice',
+            headers={'Authorization': f'Bearer {key}'},
+            data={'model': settings.TTS_MODEL, 'customName': name, 'text': transcript.strip()},
+            files={'file': (filename, sample, mime_type)},
+        )
+        if response.is_error:
+            raise ValueError(f'音色创建失败（服务端 HTTP {response.status_code}）；请检查录音时长、格式和余额。')
+        voice = response.json().get('uri')
+        if not isinstance(voice, str) or not voice:
+            raise ValueError('语音服务未返回音色 ID。')
+        return voice
+    finally:
+        if owns_client:
+            await client.aclose()
+
+
+def script_segments(script, speakers=None):
+    """Keep every spoken line in short, naturally punctuated TTS turns."""
+    speakers = speaker_labels(2) if speakers is None else speakers
+    role_pattern = '|'.join(re.escape(role) for role in sorted(speakers, key=len, reverse=True))
     turns = []
-    for line in script.splitlines():
-        match = re.match(r'^\s*(主持人|嘉宾)\s*[：:]\s*(.+)', line)
+    for line_number, line in enumerate(script.splitlines(), 1):
+        match = re.match(rf'^\s*({role_pattern})\s*[：:]\s*(.+)', line)
         if not match:
-            if line.strip():
-                raise ValueError('文稿包含无法分配角色的台词，请先修正文稿。')
+            stripped = line.strip()
+            if stripped and not (re.match(r'^#{1,6}\s', stripped) or
+                                 re.fullmatch(r'[（(].*[）)]', stripped) or
+                                 re.fullmatch(r'\[\d+(?:\s*[,，、]\s*\d+)*\]', stripped)):
+                raise ValueError(f'文稿第 {line_number} 行无法分配角色：{stripped[:80]}')
             continue
         speaker, content = match.groups()
         content = re.sub(r'\[\d+\]', '', content).strip()
         if not content:
             continue
-        while len(content) > 900:
-            cut = max(content.rfind(mark, 0, 900) for mark in '。！？；.!?;') + 1
-            cut = cut if cut > 200 else 900
+        while len(content) > TTS_TURN_LENGTH:
+            cut = max(content.rfind(mark, 0, TTS_TURN_LENGTH + 1) for mark in '。！？；.!?;') + 1
+            if cut < 40:
+                cut = max(content.rfind(mark, 0, TTS_TURN_LENGTH + 1) for mark in '，、,') + 1
+            cut = cut if cut >= 40 else TTS_TURN_LENGTH
             turns.append((speaker, content[:cut].strip()))
             content = content[cut:].strip()
         if content:
             turns.append((speaker, content))
-    if not turns or {speaker for speaker, _ in turns} != {'主持人', '嘉宾'}:
-        raise ValueError('文稿需要主持人和嘉宾两种台词。')
+    if not turns or {speaker for speaker, _ in turns} != set(speakers):
+        raise ValueError('文稿需要以下角色的台词：' + '、'.join(speakers))
     return turns
 
 
@@ -56,35 +113,89 @@ def join_wav(chunks, destination):
                     raise ValueError('语音片段的采样参数不一致，无法合成。')
                 if index:
                     output.writeframes(b'\0' * (current[0] * current[1] * current[2] // 4))
-                output.writeframes(segment.readframes(segment.getnframes()))
+                frames = segment.readframes(segment.getnframes())
+                rms = audioop.rms(frames, current[1])
+                peak = audioop.max(frames, current[1])
+                if rms and peak:
+                    ceiling = (2 ** (current[1] * 8 - 1)) - 1
+                    gain = min(3.0, 0.13 * ceiling / rms, 0.95 * ceiling / peak)
+                    frames = audioop.mul(frames, current[1], gain)
+                output.writeframes(frames)
     return destination
 
 
-async def render_audio(script, run_id, *, voices=None, client=None, on_step=None):
+async def render_audio(script, run_id, *, voices=None, speakers=None, client=None, on_step=None):
+    speakers = speaker_labels(2) if speakers is None else speakers
     voices = voices or DEFAULT_VOICES
-    if not all(voices.get(role) for role in ('主持人', '嘉宾')):
-        raise ValueError('请为主持人和嘉宾分别选择音色。')
+    if not all(voices.get(role) for role in speakers):
+        raise ValueError('请为每位播客角色选择音色。')
     key = settings.TTS_API_KEY or (settings.LLM_API_KEY if 'siliconflow' in settings.LLM_BASE_URL else '')
     if not key and client is None:
         raise ValueError('请配置 TTS_API_KEY 后再生成音频。')
-    client = client or AsyncOpenAI(api_key=key, base_url=settings.TTS_BASE_URL, timeout=60)
+    client = client or AsyncOpenAI(api_key=key, base_url=settings.TTS_BASE_URL, timeout=60, max_retries=0)
     output_dir = Path(__file__).resolve().parents[2] / 'generated_audio'
     output_dir.mkdir(exist_ok=True)
-    destination = output_dir / f'podcast-{run_id}.wav'
-    temporary = output_dir / f'podcast-{run_id}.part.wav'
-    turns = script_segments(script)
-    async def synthesize(speaker, content):
-        response = await asyncio.wait_for(client.audio.speech.create(
-            model=settings.TTS_MODEL, voice=voices[speaker], input=content, response_format='wav',
-        ), timeout=90)
-        return response.content
+    cache_dir = output_dir / 'segments'
+    cache_dir.mkdir(exist_ok=True)
+    cutoff = time.time() - 7 * 86400
+    for cached in cache_dir.glob('*.wav'):
+        try:
+            if cached.stat().st_mtime < cutoff:
+                cached.unlink()
+        except (FileNotFoundError, PermissionError):
+            pass
+    destination = output_dir / f'podcast-{run_id}-{uuid.uuid4().hex}.wav'
+    temporary = destination.with_suffix('.part.wav')
+    turns = script_segments(script, speakers)
+    limiter = asyncio.Semaphore(TTS_BATCH_SIZE)
+    progress_lock = asyncio.Lock()
+    chunks = [b''] * len(turns)
+    completed = 0
 
-    chunks = []
-    for start in range(0, len(turns), TTS_BATCH_SIZE):
-        batch = turns[start:start + TTS_BATCH_SIZE]
-        chunks.extend(await asyncio.gather(*(synthesize(speaker, content) for speaker, content in batch)))
-        if on_step:
-            await on_step(f'配音：已完成 {len(chunks)}/{len(turns)} 段')
+    async def synthesize(index, speaker, content):
+        nonlocal completed
+        cache_key = hashlib.sha256(json.dumps([settings.TTS_MODEL, voices[speaker], content], ensure_ascii=False).encode()).hexdigest()
+        cache_file = cache_dir / f'{cache_key}.wav'
+        async with limiter:
+            if cache_file.is_file():
+                chunks[index] = cache_file.read_bytes()
+            else:
+                for attempt in range(3):
+                    try:
+                        response = await asyncio.wait_for(client.audio.speech.create(
+                            model=settings.TTS_MODEL, voice=voices[speaker], input=content, response_format='wav',
+                        ), timeout=90)
+                        with wave.open(io.BytesIO(response.content), 'rb') as wav:
+                            if not wav.getnframes():
+                                raise ValueError('语音服务返回了空音频。')
+                        chunks[index] = response.content
+                        temporary_cache = cache_dir / f'{cache_key}.{uuid.uuid4().hex}.part'
+                        temporary_cache.write_bytes(response.content)
+                        try:
+                            temporary_cache.replace(cache_file)
+                        except PermissionError:
+                            if not cache_file.is_file():
+                                raise
+                            temporary_cache.unlink(missing_ok=True)
+                        break
+                    except (APIConnectionError, APIStatusError, asyncio.TimeoutError) as error:
+                        if isinstance(error, APIStatusError) and error.status_code < 500 or attempt == 2:
+                            raise
+                        await asyncio.sleep(2 ** attempt)
+        async with progress_lock:
+            completed += 1
+            if on_step and (completed % TTS_BATCH_SIZE == 0 or completed == len(turns)):
+                await on_step(f'配音：已完成 {completed}/{len(turns)} 段')
+
+    tasks = [asyncio.create_task(synthesize(index, speaker, content))
+             for index, (speaker, content) in enumerate(turns)]
+    try:
+        await asyncio.gather(*tasks)
+    except Exception:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
     try:
         join_wav(chunks, temporary)
         temporary.replace(destination)

@@ -52,7 +52,7 @@ class SourceResponse(BaseModel):
     is_duplicate: bool
     duplicate_of: Optional[int] = None
     relevance_score: Optional[float] = None
-    is_about_target_book: bool
+    is_about_target_book: Optional[bool] = None
     book_identity_reasoning: Optional[str] = None
     created_at: datetime
 

@@ -45,6 +45,7 @@ async def _run_podcast_async(run_id):
                 raise ValueError('没有可用资料，请重新研究或提供参考文章。')
             request = {'book': {'title': book.title, 'author': book.author},
                        'theme': user_input.get('theme') or book.title,
+                       'speaker_count': user_input.get('speaker_count', 2),
                        'duration': user_input.get('duration', 5), 'style': user_input.get('style', '自然对谈'),
                        'audience': user_input.get('audience', '普通读者'), 'sources': sources}
 
@@ -52,7 +53,12 @@ async def _run_podcast_async(run_id):
                 run.current_step = step
                 await db.commit()
 
-            result = await run_podcast_flow(request, on_step=on_step)
+            async def on_checkpoint(_stage, checkpoint):
+                run.result = checkpoint
+                await db.commit()
+
+            result = await run_podcast_flow(request, checkpoint=run.result, on_step=on_step,
+                                            on_checkpoint=on_checkpoint)
             run.result = result
             run.status = 'completed' if result['decision'] == 'approved' else 'needs_revision'
             run.current_step = '评审通过' if run.status == 'completed' else '达到修改上限，需人工审阅'

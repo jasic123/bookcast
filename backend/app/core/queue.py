@@ -1,5 +1,7 @@
 """Redis Queue configuration for background tasks."""
 
+import asyncio
+from contextlib import asynccontextmanager
 from redis import Redis
 from rq import Queue
 from app.core.config import settings
@@ -8,7 +10,9 @@ from app.core.config import settings
 # Create Redis connection
 redis_conn = Redis.from_url(
     settings.REDIS_URL,
-    protocol=2
+    protocol=2,
+    socket_connect_timeout=2,
+    socket_timeout=2,
 )
 
 # Create RQ queue
@@ -17,6 +21,27 @@ research_queue = Queue(
     connection=redis_conn,
     default_timeout=settings.MAX_TASK_EXECUTION_TIME
 )
+audio_queue = Queue(
+    "audio",
+    connection=redis_conn,
+    default_timeout=3600,
+)
+podcast_queue = Queue(
+    "podcast", connection=redis_conn,
+    default_timeout=max(settings.MAX_TASK_EXECUTION_TIME, 1200),
+)
+
+
+@asynccontextmanager
+async def creation_guard(key: str):
+    """Serialize duplicate create requests across API processes."""
+    lock = redis_conn.lock(f'create:{key}', timeout=60)
+    if not await asyncio.to_thread(lock.acquire, blocking=False):
+        raise TimeoutError('正在创建同一任务，请稍后查看现有任务。')
+    try:
+        yield
+    finally:
+        await asyncio.to_thread(lock.release)
 
 
 def enqueue_research(research_id: int) -> str:
@@ -45,7 +70,7 @@ def enqueue_research(research_id: int) -> str:
 def enqueue_podcast(run_id: int) -> str:
     from app.tasks.podcast_tasks import run_podcast_task
 
-    job = research_queue.enqueue(
+    job = podcast_queue.enqueue(
         run_podcast_task, run_id,
         job_timeout=max(settings.MAX_TASK_EXECUTION_TIME, 1200),
         result_ttl=3600, failure_ttl=86400,
@@ -56,7 +81,7 @@ def enqueue_podcast(run_id: int) -> str:
 def enqueue_podcast_audio(run_id: int) -> str:
     from app.tasks.podcast_audio_tasks import run_podcast_audio_task
 
-    job = research_queue.enqueue(
+    job = audio_queue.enqueue(
         run_podcast_audio_task, run_id,
         job_timeout=3600, result_ttl=3600, failure_ttl=86400,
     )

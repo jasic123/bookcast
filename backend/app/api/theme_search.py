@@ -1,12 +1,16 @@
 """Theme-first book discovery API."""
+import asyncio
+from datetime import datetime, timedelta
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from redis.exceptions import RedisError
-from sqlalchemy import select
+from rq.registry import StartedJobRegistry
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.queue import enqueue_theme_search
+from app.core.queue import enqueue_theme_search, research_queue
 from app.models.book import Book
 from app.models.theme_search import ThemeBookEvidence, ThemeSearch
 
@@ -26,7 +30,40 @@ class ThemeSearchCreate(BaseModel):
         return value
 
 
+def _job_is_active(job_id: str) -> bool:
+    if job_id in research_queue.job_ids:
+        return True
+    return job_id in StartedJobRegistry(queue=research_queue).get_job_ids()
+
+
+async def _sync_task_status(db, search):
+    if search.status not in ('queued', 'running'):
+        return
+    if search.job_id:
+        try:
+            active = await asyncio.to_thread(_job_is_active, search.job_id)
+            if not active:
+                await asyncio.sleep(1)
+                active = await asyncio.to_thread(_job_is_active, search.job_id)
+        except RedisError:
+            return
+    else:
+        # Older rows have no RQ job ID; allow existing jobs time to finish.
+        limit = timedelta(minutes=30 if search.status == 'queued' else 60)
+        active = not search.created_at or datetime.utcnow() - search.created_at < limit
+    if active:
+        return
+    await db.execute(
+        update(ThemeSearch)
+        .where(ThemeSearch.id == search.id, ThemeSearch.status.in_(['queued', 'running']))
+        .values(status='failed', error_message='找书任务已从队列中丢失，请重新搜索。')
+    )
+    await db.commit()
+    await db.refresh(search)
+
+
 async def _response(db, search):
+    await _sync_task_status(db, search)
     books = []
     if search.book_list_id:
         result = await db.execute(select(Book, ThemeBookEvidence).join(ThemeBookEvidence, ThemeBookEvidence.book_id == Book.id)
@@ -48,7 +85,9 @@ async def create_theme_search(request: ThemeSearchCreate, db: AsyncSession = Dep
     await db.commit()
     await db.refresh(search)
     try:
-        enqueue_theme_search(search.id)
+        search.job_id = enqueue_theme_search(search.id)
+        await db.commit()
+        await db.refresh(search)
     except RedisError:
         search.status = 'failed'
         search.error_message = '无法连接任务队列，请检查 Redis 服务。'

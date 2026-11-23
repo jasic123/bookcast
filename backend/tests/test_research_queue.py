@@ -41,6 +41,13 @@ def test_research_creation_and_worker():
                 response = await client.get(f'/api/research/book/{book_id}')
                 assert response.status_code == 200, response.text
                 assert response.json()[0]['theme_matches'] == []
+                response = await client.post('/api/research/', json={'book_id': book_id, 'themes': ['test']})
+                assert response.status_code == 409, response.text
+                assert response.json()['detail']['research_id'] == research_id
+                async with sessions() as db:
+                    current = await db.get(Research, research_id)
+                    current.status = 'completed'
+                    await db.commit()
                 with patch('app.api.research.enqueue_research', side_effect=ConnectionError('offline')):
                     response = await client.post('/api/research/', json={'book_id': book_id, 'themes': ['test']})
                 assert response.status_code == 503, response.text
