@@ -1,5 +1,6 @@
 """Queue and retrieve podcast drafting runs."""
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -20,6 +21,7 @@ router = APIRouter(prefix='/podcasts', tags=['podcasts'])
 class PodcastCreate(BaseModel):
     research_id: int
     speaker_count: int = Field(ge=1, le=4)
+    language: Literal['zh', 'en'] = 'zh'
     theme: str = Field(default='', max_length=200)
     duration: int = Field(default=5, ge=2, le=20)
     style: str = Field(default='自然对谈', max_length=100)
@@ -32,9 +34,15 @@ class PodcastAudioCreate(BaseModel):
     accept_review_issues: bool = False
 
 
+class PodcastRevisionCreate(BaseModel):
+    review_iteration: int
+    issue_indices: list[int] = Field(min_length=1)
+
+
 def _response(run):
     speakers = speaker_labels((run.request or {}).get('speaker_count', 2))
     return {'id': run.id, 'research_id': run.research_id, 'status': run.status,
+            'language': (run.request or {}).get('language', 'zh'),
             'speaker_count': len(speakers), 'speakers': speakers,
             'current_step': run.current_step, 'error_message': run.error_message,
             'result': run.result, 'created_at': run.created_at,
@@ -112,6 +120,62 @@ async def retry_podcast(run_id: int, db: AsyncSession = Depends(get_db)):
                 raise HTTPException(status_code=503, detail=run.error_message) from error
     except TimeoutError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    return _response(run)
+
+
+@router.post('/{run_id}/revise')
+async def revise_podcast(run_id: int, request: PodcastRevisionCreate, db: AsyncSession = Depends(get_db)):
+    run = await db.get(PodcastRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail='播客任务不存在。')
+    try:
+        async with creation_guard(f'podcast:{run.research_id}'):
+            await db.refresh(run)
+            result = run.result or {}
+            reviews = result.get('reviews') or []
+            drafts = result.get('drafts') or []
+            if run.status != 'needs_revision' or not drafts or not reviews:
+                raise HTTPException(status_code=409, detail='请等待当前文稿完成评审后再选择修改意见。')
+            existing = (await db.execute(select(PodcastRun).where(
+                PodcastRun.research_id == run.research_id, PodcastRun.status.in_(['queued', 'running']),
+                PodcastRun.id != run.id,
+            ).limit(1))).scalar_one_or_none()
+            if existing:
+                raise HTTPException(status_code=409, detail={'message': '该研究已有进行中的播客任务。', 'run_id': existing.id})
+            latest = reviews[-1]
+            issues = latest.get('issues') or []
+            indices = request.issue_indices
+            if (request.review_iteration != latest.get('iteration') or
+                    len(indices) != len(set(indices)) or
+                    any(index < 0 or index >= len(issues) for index in indices)):
+                raise HTTPException(status_code=400, detail='评审意见已变化，请刷新后重新选择。')
+            if run.audio_status in ('queued', 'running'):
+                raise HTTPException(status_code=409, detail='请等待当前配音任务结束后再修改文稿。')
+            selected = [issues[index] for index in indices]
+            checkpoint = {**result, 'decision': 'revise', 'checkpoint_stage': 'reviewed',
+                          'feedback': {'iteration': latest['iteration'], 'issues': selected,
+                                       'selected_by_user': True},
+                          'manual_revision_target': len(drafts) + 1}
+            run.result = checkpoint
+            run.status = 'queued'
+            run.current_step = '等待按所选评审意见修改'
+            run.error_message = None
+            run.completed_at = None
+            run.audio_status = None
+            run.audio_step = None
+            run.audio_file = None
+            await db.commit()
+            try:
+                enqueue_podcast(run.id)
+            except RedisError as error:
+                run.status = 'failed'
+                run.error_message = '无法连接任务队列，请检查 Redis 服务。'
+                await db.commit()
+                raise HTTPException(status_code=503, detail=run.error_message) from error
+    except TimeoutError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except RedisError as error:
+        raise HTTPException(status_code=503, detail='无法连接任务队列，请检查 Redis 服务。') from error
     return _response(run)
 
 

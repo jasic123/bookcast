@@ -46,6 +46,7 @@ async def _run_podcast_async(run_id):
             request = {'book': {'title': book.title, 'author': book.author},
                        'theme': user_input.get('theme') or book.title,
                        'speaker_count': user_input.get('speaker_count', 2),
+                       'language': user_input.get('language', 'zh'),
                        'duration': user_input.get('duration', 5), 'style': user_input.get('style', '自然对谈'),
                        'audience': user_input.get('audience', '普通读者'), 'sources': sources}
 

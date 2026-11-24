@@ -112,7 +112,7 @@ class ResearchOrchestrator:
             theme_matches = await run_specialist(
                 "theme_agent", "基于证据筛选主题", {"title": book.title, "author": book.author,
                 "description": book.description or (catalog or {}).get("description"), "themes": research.themes}, theme_agent,
-            )
+            ) if research.themes else []
 
             # Save theme matches
             for tm in theme_matches:
@@ -136,7 +136,7 @@ class ResearchOrchestrator:
             # Check if any theme is a candidate
             is_candidate, _ = self.theme_screener.aggregate_matches(
                 theme_matches, research.match_mode
-            )
+            ) if research.themes else (True, '整本书研究，不筛选主题')
 
             # A theme mismatch is a research finding, not a reason to skip
             # general book materials needed for a separate review.

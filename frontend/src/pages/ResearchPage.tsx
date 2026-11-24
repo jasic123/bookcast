@@ -23,6 +23,7 @@ export default function ResearchPage() {
 
   // Create research form
   const [themes, setThemes] = useState<string>(() => searchParams.get('theme') || '')
+  const directBook = searchParams.get('mode') === 'book'
   const [matchMode, setMatchMode] = useState<'any' | 'all'>('any')
   const [jobId, setJobId] = useState<string | null>(null)
   const [jobStatus, setJobStatus] = useState<string | null>(null)
@@ -135,7 +136,7 @@ export default function ResearchPage() {
 
   const handleCreateResearch = async () => {
     if (creating.current) return
-    if (!bookId || !themes.trim()) {
+    if (!bookId || (!directBook && !themes.trim())) {
       setError('请输入至少一个主题')
       return
     }
@@ -250,13 +251,13 @@ export default function ResearchPage() {
         <div className="space-y-3">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              关注主题（用逗号分隔）*
+              关注主题（用逗号分隔）{directBook ? '，可留空以研究整本书' : '*'}
             </label>
             <input
               type="text"
               value={themes}
               onChange={(e) => setThemes(e.target.value)}
-              placeholder="例如：死亡, 轮回, 虚拟世界"
+              placeholder={directBook ? '可留空：直接研究整本书' : '例如：死亡, 轮回, 虚拟世界'}
               className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
               disabled={loading || !!jobId}
             />
@@ -319,7 +320,7 @@ export default function ResearchPage() {
                 <div className="flex justify-between items-center">
                   <div>
                     <span className="font-medium">
-                      主题：{research.themes.join(', ')}
+                      {research.themes.length ? '主题：' + research.themes.join(', ') : '整本书研究'}
                     </span>
                     <span className="ml-3 text-sm text-gray-500">
                       {new Date(research.created_at).toLocaleString('zh-CN')}

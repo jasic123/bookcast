@@ -2,6 +2,7 @@ import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom'
 import ThemeSearchPage from './pages/ThemeSearchPage'
 import BookListPage from './pages/BookListPage'
 import ResearchPage from './pages/ResearchPage'
+import SingleBookPage from './pages/SingleBookPage'
 
 function App() {
   return (
@@ -18,6 +19,12 @@ function App() {
                   主题找书
                 </Link>
                 <Link
+                  to="/single-book"
+                  className="inline-flex items-center px-1 pt-1 text-sm font-medium text-gray-500 hover:text-gray-900"
+                >
+                  指定书籍
+                </Link>
+                <Link
                   to="/books"
                   className="inline-flex items-center px-1 pt-1 text-sm font-medium text-gray-500 hover:text-gray-900"
                 >
@@ -32,6 +39,7 @@ function App() {
           <Routes>
             <Route path="/" element={<ThemeSearchPage />} />
             <Route path="/books" element={<BookListPage />} />
+            <Route path="/single-book" element={<SingleBookPage />} />
             <Route path="/research/:bookId" element={<ResearchPage />} />
           </Routes>
         </main>

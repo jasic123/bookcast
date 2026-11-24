@@ -9,7 +9,7 @@ from app.models.research import MatchStatus, SourceType, SufficiencyLevel
 class ResearchCreate(BaseModel):
     """Schema for creating a research session."""
     book_id: int
-    themes: List[str] = Field(..., min_length=1, description="Themes to research")
+    themes: List[str] = Field(default_factory=list, description="Optional themes; empty means research the whole book")
     match_mode: str = Field(default="any", pattern="^(any|all)$")
 
 

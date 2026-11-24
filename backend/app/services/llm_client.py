@@ -268,10 +268,10 @@ Requirements for a podcast episode:
 2. Need credible plot/content summary
 3. Need at least some independent analysis (not just publisher descriptions)
 4. Preferably multiple perspectives
-5. Theme relevance must be supported by evidence
+5. If a theme was requested, its relevance must be supported by evidence; an empty Theme Matches section means this is a whole-book review with no theme filter
 
 Assessment levels:
-- "recommended": Good theme match + sufficient diverse materials
+- "recommended": Sufficient diverse materials, and a good theme match only when a theme was requested
 - "insufficient": Theme may match but materials too limited
 - "needs_review": Uncertainty in book identity or theme evidence
 - "no_theme_evidence": No theme evidence found

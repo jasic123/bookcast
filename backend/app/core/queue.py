@@ -35,7 +35,7 @@ podcast_queue = Queue(
 @asynccontextmanager
 async def creation_guard(key: str):
     """Serialize duplicate create requests across API processes."""
-    lock = redis_conn.lock(f'create:{key}', timeout=60)
+    lock = redis_conn.lock(f'create:{key}', timeout=60, thread_local=False)
     if not await asyncio.to_thread(lock.acquire, blocking=False):
         raise TimeoutError('正在创建同一任务，请稍后查看现有任务。')
     try:

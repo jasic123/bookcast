@@ -52,6 +52,29 @@ def test_citation_formats_are_normalized_without_inventing_ids():
     assert normalize_citations('观点[来源ID 12, 34]；另一观点【来源：56】。') == '观点[12][34]；另一观点[56]。'
 
 
+def test_english_script_keeps_speaker_labels_and_rejects_chinese_dialogue():
+    async def check():
+        plan = json.dumps({'premise': 'Discuss', 'outline': [{'title': 'Opening', 'minutes': 2, 'focus': 'Book'}]})
+        english = '主持人：' + ('The source supports this reading of the book. ' * 44) + '[1]'
+        chinese = '主持人：' + ('这本书的观点需要资料支持。' * 40) + '[1]'
+        approval = json.dumps({'approved': True, 'issues': [], 'summary': 'Approved'})
+        client = type('Client', (), {})()
+        client.chat_completion = AsyncMock(side_effect=[plan, chinese, approval, english, approval])
+        search = type('Search', (), {})()
+        search.search = AsyncMock(return_value=[])
+        with patch('app.services.podcast_agents.curate_review_sources', new_callable=AsyncMock,
+                   side_effect=lambda client, book, sources: (sources, {'findings': [], 'gaps': []}, [])):
+            result = await run_podcast_flow({**_request(), 'speaker_count': 1, 'language': 'en'}, client=client, search=search)
+        assert result['decision'] == 'approved', result['reviews']
+        assert any('英文文稿' in issue for issue in result['reviews'][0]['issues'])
+        assert result['drafts'][-1]['content'].startswith('主持人：The source')
+        writer_prompt = client.chat_completion.await_args_list[1].args[0][0]['content']
+        assert 'Write all spoken dialogue in natural English' in writer_prompt
+        assert '"language": "en"' in client.chat_completion.await_args_list[1].args[0][1]['content']
+
+    asyncio.run(check())
+
+
 def test_graph_stops_without_approval_after_three_drafts():
     async def check():
         plan = json.dumps({'premise': 'Discuss', 'outline': [{'title': 'Opening', 'minutes': 2, 'focus': 'Book'}]})
@@ -193,6 +216,39 @@ def test_checkpoint_resume_revision_writes_next_version():
     asyncio.run(check())
 
 
+def test_user_selected_feedback_revises_saved_draft_once():
+    async def check():
+        request = {**_request(), 'speaker_count': 1}
+        first = '主持人：' + ('旧稿内容。' * 60) + '[1]'
+        second = '主持人：' + ('只调整开场后的内容。' * 55) + '[1]'
+        checkpoint = {
+            'plan': {'premise': 'Saved', 'outline': [{'title': 'Opening', 'minutes': 2, 'focus': 'Book'}]},
+            'sources': request['sources'], 'evidence': {'findings': [], 'gaps': []},
+            'drafts': [{'iteration': 1, 'content': first}],
+            'reviews': [{'iteration': 1, 'approved': False, 'issues': ['补充证据', '调整开场']}],
+            'feedback': {'iteration': 1, 'issues': ['调整开场'], 'selected_by_user': True},
+            'decision': 'revise', 'checkpoint_stage': 'reviewed', 'manual_revision_target': 2,
+        }
+        client = type('Client', (), {})()
+        async def respond(messages, **kwargs):
+            if '播客稿作者' in messages[0]['content']:
+                payload = json.loads(messages[1]['content'])
+                assert payload['feedback']['issues'] == ['调整开场']
+                assert payload['previous_script'] == first
+                return second
+            return json.dumps({'approved': False, 'issues': ['需人工审阅'], 'summary': '未通过'})
+        client.chat_completion = AsyncMock(side_effect=respond)
+        search = type('Search', (), {})()
+        search.search = AsyncMock(side_effect=AssertionError('saved research must be reused'))
+        result = await run_podcast_flow(request, checkpoint=checkpoint, client=client, search=search)
+        assert result['decision'] == 'stop'
+        assert [draft['iteration'] for draft in result['drafts']] == [1, 2]
+        assert [review['iteration'] for review in result['reviews']] == [1, 2]
+        assert client.chat_completion.await_count == 2
+
+    asyncio.run(check())
+
+
 def test_podcast_api_queues_and_reads_run():
     async def check():
         engine = create_async_engine('sqlite+aiosqlite:///:memory:')
@@ -219,11 +275,13 @@ def test_podcast_api_queues_and_reads_run():
         try:
             with patch('app.api.podcasts.enqueue_podcast', return_value='job') as enqueue:
                 async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
-                    response = await client.post('/api/podcasts/', json={'research_id': research_id, 'speaker_count': 1, 'duration': 5, 'reference_text': 'Reference'})
+                    response = await client.post('/api/podcasts/', json={'research_id': research_id, 'speaker_count': 1, 'language': 'en', 'duration': 5, 'reference_text': 'Reference'})
                     assert response.status_code == 200, response.text
                     run = response.json()
                     assert run['status'] == 'queued'
                     assert run['speakers'] == ['主持人']
+                    assert run['language'] == 'en'
+                    assert (await client.post('/api/podcasts/', json={'research_id': research_id, 'speaker_count': 1, 'language': 'fr'})).status_code == 422
                     assert (await client.post('/api/podcasts/', json={'research_id': research_id})).status_code == 422
                     assert (await client.get(f'/api/podcasts/{run["id"]}')).json()['id'] == run['id']
                     assert (await client.get(f'/api/podcasts/research/{research_id}')).json()['id'] == run['id']

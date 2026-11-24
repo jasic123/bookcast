@@ -8,7 +8,7 @@ import type {
 
 export type PodcastRun = {
   id: number; research_id: number; status: 'queued' | 'running' | 'completed' | 'needs_revision' | 'failed';
-  speaker_count: number; speakers: string[];
+  speaker_count: number; speakers: string[]; language: 'zh' | 'en';
   current_step: string | null; error_message: string | null;
   audio_status: 'queued' | 'running' | 'completed' | 'failed' | null; audio_step: string | null; audio_error: string | null; audio_url: string | null; audio_voices: Record<string, string> | null;
   result: null | { plan: { premise: string; outline: Array<{ title: string; minutes: number; focus: string }> }; evidence: { gaps: string[] }; warnings: string[]; drafts: Array<{ iteration: number; content: string }>; reviews: Array<{ iteration: number; approved: boolean; issues: string[]; summary: string; estimated_minutes: number }>; sources: Array<{ source_id: number; title: string; url: string; source_type: string }> }
@@ -49,9 +49,10 @@ export const configApi = {
 }
 
 export const podcastApi = {
-  create: async (data: { research_id: number; speaker_count: number; theme: string; duration: number; style: string; audience: string; reference_text: string }): Promise<PodcastRun> => (await api.post('/podcasts/', data)).data,
+  create: async (data: { research_id: number; speaker_count: number; language: 'zh' | 'en'; theme: string; duration: number; style: string; audience: string; reference_text: string }): Promise<PodcastRun> => (await api.post('/podcasts/', data)).data,
   get: async (id: number): Promise<PodcastRun> => (await api.get(`/podcasts/${id}`)).data,
   retry: async (id: number): Promise<PodcastRun> => (await api.post(`/podcasts/${id}/retry`)).data,
+  revise: async (id: number, reviewIteration: number, issueIndices: number[]): Promise<PodcastRun> => (await api.post(`/podcasts/${id}/revise`, { review_iteration: reviewIteration, issue_indices: issueIndices })).data,
   latest: async (researchId: number): Promise<PodcastRun | null> => (await api.get(`/podcasts/research/${researchId}`)).data,
   createAudio: async (id: number, voices: Record<string, string>, accept_review_issues: boolean): Promise<PodcastRun> => (await api.post(`/podcasts/${id}/audio`, { voices, accept_review_issues })).data,
   uploadVoice: async (sample: File, transcript: string, name: string): Promise<{ voice_id: string }> => {
@@ -72,6 +73,10 @@ export const themeSearchApi = {
 
 // Books API
 export const booksApi = {
+  searchSingle: async (title: string, author = ''): Promise<{ books: Array<{ title: string; author: string; work_key: string | null; first_published: number | null; catalog_url: string | null; source: 'open_library' | 'web'; evidence_url?: string; evidence_excerpt?: string }>; references?: Array<{ title: string; url: string }> }> =>
+    (await api.get('/books/search', { params: { title, author } })).data,
+  addSingle: async (book: { title: string; author: string; work_key?: string }): Promise<Book> =>
+    (await api.post('/books/single', book)).data,
   fetchAmazonList: async (listName: string, listUrl?: string): Promise<BookList> => {
     const response = await api.post('/books/lists/amazon', {
       list_name: listName,

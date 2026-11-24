@@ -10,6 +10,7 @@ const presetVoice = (role: string, defaults: VoiceDefaults | null) =>
 export default function PodcastPanel({ researchId }: { researchId: number }) {
   const [theme, setTheme] = useState('')
   const [speakerCount, setSpeakerCount] = useState<number | null>(null)
+  const [language, setLanguage] = useState<'zh' | 'en'>('zh')
   const [duration, setDuration] = useState(5)
   const [style, setStyle] = useState('自然口语')
   const [audience, setAudience] = useState('普通读者')
@@ -17,6 +18,7 @@ export default function PodcastPanel({ researchId }: { researchId: number }) {
   const [voices, setVoices] = useState<Record<string, string>>({})
   const [defaultVoices, setDefaultVoices] = useState<VoiceDefaults | null>(null)
   const [acceptReviewIssues, setAcceptReviewIssues] = useState(false)
+  const [selectedIssues, setSelectedIssues] = useState<number[]>([])
   const [run, setRun] = useState<PodcastRun | null>(null)
   const [loading, setLoading] = useState(false)
   const creating = useRef(false)
@@ -47,6 +49,7 @@ export default function PodcastPanel({ researchId }: { researchId: number }) {
     setRun(null)
     setError(null)
     setAcceptReviewIssues(false)
+    setSelectedIssues([])
     podcastApi.latest(researchId).then((result) => { if (active) setRun(result) }).catch(() => { if (active) setError('无法加载播客任务。') })
     return () => { active = false }
   }, [researchId])
@@ -92,8 +95,9 @@ export default function PodcastPanel({ researchId }: { researchId: number }) {
     setLoading(true)
     setError(null)
     setAcceptReviewIssues(false)
+    setSelectedIssues([])
     try {
-      setRun(await podcastApi.create({ research_id: researchId, speaker_count: speakerCount, theme: theme.trim(), duration, style, audience, reference_text: reference }))
+      setRun(await podcastApi.create({ research_id: researchId, speaker_count: speakerCount, language, theme: theme.trim(), duration, style, audience, reference_text: reference }))
     } catch (err: any) {
       const detail = err.response?.data?.detail
       setError(typeof detail === 'object' ? `${detail.message}（任务 #${detail.run_id}）` : detail || '创建播客任务失败，请重试。')
@@ -115,6 +119,21 @@ export default function PodcastPanel({ researchId }: { researchId: number }) {
     catch (err: any) { setError(err.response?.data?.detail?.message || err.response?.data?.detail || '续跑失败，请检查任务队列。') }
     finally { setLoading(false) }
   }
+  const revise = async () => {
+    const reviews = run?.result?.reviews
+    const review = reviews?.[reviews.length - 1]
+    if (!run || !review || !selectedIssues.length || loading) return
+    setLoading(true)
+    setError(null)
+    try {
+      setRun(await podcastApi.revise(run.id, review.iteration, selectedIssues))
+      setSelectedIssues([])
+      setAcceptReviewIssues(false)
+    } catch (err: any) {
+      const detail = err.response?.data?.detail
+      setError(typeof detail === 'object' ? detail.message : detail || '按所选意见修改失败，请重试。')
+    } finally { setLoading(false) }
+  }
 
   const result = run?.result
   const lastDraft = result?.drafts?.[result.drafts.length - 1]
@@ -124,6 +143,7 @@ export default function PodcastPanel({ researchId }: { researchId: number }) {
     <p className="text-sm text-gray-500 mt-2">选择人数后，由策划、资料研究、撰稿和评审 Agent 生成文稿；未通过时最多修改两轮。评审后可单独配音。</p>
     <div className="grid gap-3 md:grid-cols-2 mt-4">
       <label className="text-sm">播客人数（必选）<select value={speakerCount ?? ''} onChange={(e) => setSpeakerCount(e.target.value ? Number(e.target.value) : null)} className="mt-1 w-full rounded border px-3 py-2"><option value="">请选择人数</option><option value="1">单人讲述</option><option value="2">双人对谈</option><option value="3">三人圆桌</option><option value="4">四人圆桌</option></select></label>
+      <label className="text-sm">文稿语言<select value={language} onChange={(e) => setLanguage(e.target.value as 'zh' | 'en')} className="mt-1 w-full rounded border px-3 py-2"><option value="zh">中文</option><option value="en">English</option></select></label>
       <label className="text-sm">播客主题（可留空）<input value={theme} onChange={(e) => setTheme(e.target.value)} maxLength={200} className="mt-1 w-full rounded border px-3 py-2" placeholder="例如：这本书如何描写友情" /></label>
       <label className="text-sm">目标时长（分钟）<input type="number" value={duration} onChange={(e) => setDuration(Number(e.target.value))} min={2} max={20} className="mt-1 w-full rounded border px-3 py-2" /></label>
       <label className="text-sm">表达风格<select value={style} onChange={(e) => setStyle(e.target.value)} className="mt-1 w-full rounded border px-3 py-2"><option>自然口语</option><option>专业深入</option><option>轻松活泼</option></select></label>
@@ -132,13 +152,13 @@ export default function PodcastPanel({ researchId }: { researchId: number }) {
     <label className="block text-sm mt-4">参考文章或笔记（可选，最多 2 万字）<textarea value={reference} onChange={(e) => setReference(e.target.value)} maxLength={20000} rows={3} className="mt-1 w-full rounded border px-3 py-2" placeholder="粘贴你有权使用的文字" /></label>
     <label className="block text-sm text-gray-600 mt-2">或导入 TXT / Markdown：<input type="file" accept=".txt,.md,text/plain,text/markdown" className="ml-2" onChange={async (event) => { const file = event.target.files?.[0]; if (!file) return; const text = await file.text(); if (text.length > 20000) { setError('参考文章超过 2 万字，请精简后再导入。'); return }; setReference(text); setError(null) }} /></label>
     <button onClick={submit} disabled={busy || !speakerCount || duration < 2 || duration > 20 || !Number.isInteger(duration)} className="mt-4 px-4 py-2 rounded bg-blue-600 text-white disabled:bg-gray-400">{busy ? '正在生成…' : '生成播客稿'}</button>
-    {run && <p className="text-sm mt-3 text-gray-600">角色：{activeSpeakers.join('、')} · 任务状态：{run.current_step || (run.status === 'queued' ? '等待队列' : run.status)}</p>}
+    {run && <p className="text-sm mt-3 text-gray-600">语言：{run.language === 'en' ? 'English' : '中文'} · 角色：{activeSpeakers.join('、')} · 任务状态：{run.current_step || (run.status === 'queued' ? '等待队列' : run.status)}</p>}
     {(error || run?.error_message) && <p className="text-sm mt-2 text-red-700">{error || run?.error_message}</p>}
     {run?.status === 'failed' && <button onClick={retry} disabled={loading} className="mt-3 px-4 py-2 rounded border border-blue-600 text-blue-700 disabled:opacity-50">{loading ? '正在续跑…' : '从最近检查点续跑'}</button>}
     {result && lastDraft && <div className="mt-5 space-y-4">
       <div className={lastReview?.approved ? 'text-green-700' : 'text-amber-700'}>{lastReview?.approved ? 'AI 评审通过，事实仍需人工核查' : '未通过评审，请根据意见人工修改'} · 共 {result.drafts.length} 版 · 预计 {lastReview?.estimated_minutes ?? '—'} 分钟</div>
       {!!result.warnings?.length && <p className="text-sm text-amber-700">{result.warnings.join(' ')}</p>}
-      {lastReview?.issues?.length ? <div className="bg-amber-50 p-3 rounded text-sm"><strong>评审意见</strong><ul className="list-disc ml-5 mt-1">{lastReview.issues.map((item, i) => <li key={i}>{item}</li>)}</ul></div> : null}
+      {lastReview?.issues?.length ? <div className="bg-amber-50 p-3 rounded text-sm"><strong>评审意见</strong><ul className="space-y-2 mt-2">{lastReview.issues.map((item, i) => <li key={i}>{run.status === 'needs_revision' ? <label className="flex items-start gap-2"><input type="checkbox" checked={selectedIssues.includes(i)} onChange={() => setSelectedIssues((previous) => previous.includes(i) ? previous.filter((index) => index !== i) : [...previous, i])} className="mt-1" /><span>{item}</span></label> : item}</li>)}</ul>{run.status === 'needs_revision' && <><button type="button" onClick={revise} disabled={loading || !selectedIssues.length} className="mt-3 px-4 py-2 rounded bg-blue-600 text-white disabled:bg-gray-400">{loading ? '正在提交修改…' : '按所选意见修改文稿'}</button><p className="text-gray-600 mt-2">保留当前版本，新稿会再次经过评审。</p></>}</div> : null}
       <details className="text-sm border rounded p-3"><summary className="cursor-pointer">策划大纲与证据缺口</summary><p className="mt-2">{result.plan?.premise}</p><ul className="list-disc ml-5 mt-2">{result.plan?.outline?.map((part, i) => <li key={i}>{part.title}（{part.minutes} 分钟）：{part.focus}</li>)}</ul>{result.evidence?.gaps?.map((gap, i) => <p className="text-amber-700 mt-1" key={i}>资料缺口：{gap}</p>)}</details>
       <div className="whitespace-pre-wrap text-gray-800 leading-7 border rounded p-4">{lastDraft.content}</div>
       {lastReview && <div className="border rounded p-4 space-y-3">

@@ -139,3 +139,57 @@ def test_failed_podcast_retry_keeps_checkpoint():
             await engine.dispose()
 
     asyncio.run(check())
+
+
+def test_selected_review_issues_queue_a_targeted_revision():
+    async def check():
+        engine = create_async_engine('sqlite+aiosqlite:///:memory:')
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as db:
+            listing = BookList(name='Test', source_type='csv')
+            db.add(listing)
+            await db.flush()
+            book = Book(title='Test book', book_list_id=listing.id)
+            db.add(book)
+            await db.flush()
+            research = Research(book_id=book.id, themes=['theme'], status='completed')
+            db.add(research)
+            await db.flush()
+            run = PodcastRun(research_id=research.id, status='needs_revision', request={'speaker_count': 1},
+                             result={'drafts': [{'iteration': 1, 'content': '主持人：旧稿。'}],
+                                     'reviews': [{'iteration': 1, 'approved': False,
+                                                  'issues': ['补充证据', '调整开场']}], 'decision': 'stop'})
+            db.add(run)
+            await db.commit()
+            run_id = run.id
+
+        async def test_db():
+            async with sessions() as session:
+                yield session
+
+        app.dependency_overrides[get_db] = test_db
+        try:
+            with patch('app.api.podcasts.enqueue_podcast') as enqueue:
+                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+                    invalid = await client.post(f'/api/podcasts/{run_id}/revise',
+                                                json={'review_iteration': 1, 'issue_indices': [2]})
+                    assert invalid.status_code == 400
+                    response = await client.post(f'/api/podcasts/{run_id}/revise',
+                                                 json={'review_iteration': 1, 'issue_indices': [1]})
+                    assert response.status_code == 200, response.text
+                    result = response.json()['result']
+                    assert response.json()['status'] == 'queued'
+                    assert result['feedback']['issues'] == ['调整开场']
+                    assert result['feedback']['selected_by_user'] is True
+                    assert result['manual_revision_target'] == 2
+                    assert len(result['drafts']) == 1
+                    assert (await client.post(f'/api/podcasts/{run_id}/revise',
+                                              json={'review_iteration': 1, 'issue_indices': [0]})).status_code == 409
+                    enqueue.assert_called_once_with(run_id)
+        finally:
+            app.dependency_overrides.pop(get_db, None)
+            await engine.dispose()
+
+    asyncio.run(check())
