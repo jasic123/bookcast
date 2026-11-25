@@ -256,7 +256,7 @@ def test_podcast_api_queues_and_reads_run():
             await conn.run_sync(Base.metadata.create_all)
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         async with sessions() as db:
-            listing = BookList(name='test', source_type='csv')
+            listing = BookList(user_id=1, name='test', source_type='csv')
             db.add(listing)
             await db.flush()
             book = Book(book_list_id=listing.id, title='Book', author='Author')

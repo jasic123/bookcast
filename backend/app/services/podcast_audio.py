@@ -21,8 +21,19 @@ DEFAULT_VOICES = {
 }
 TTS_BATCH_SIZE = 3
 TTS_TURN_LENGTH = 120
+ENGLISH_TURN_LENGTH = 240
 MAX_VOICE_SAMPLE_BYTES = 10 * 1024 * 1024
 VOICE_SAMPLE_TYPES = {'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav'}
+
+
+def tts_pronunciation(text, rules=None):
+    """Apply a user's spoken forms without changing the displayed script."""
+    for original, spoken in sorted(rules or [], key=lambda pair: len(pair[0]), reverse=True):
+        before = r'(?<![A-Za-z0-9])' if original[0].isascii() and original[0].isalnum() else ''
+        after = r'(?![A-Za-z0-9])' if original[-1].isascii() and original[-1].isalnum() else ''
+        text = re.sub(before + re.escape(original) + after,
+                      lambda _: spoken, text, flags=re.I)
+    return text
 
 
 def speaker_labels(count: int) -> list[str]:
@@ -71,24 +82,34 @@ def script_segments(script, speakers=None):
     speakers = speaker_labels(2) if speakers is None else speakers
     role_pattern = '|'.join(re.escape(role) for role in sorted(speakers, key=len, reverse=True))
     turns = []
+    current_speaker = None
     for line_number, line in enumerate(script.splitlines(), 1):
         match = re.match(rf'^\s*({role_pattern})\s*[：:]\s*(.+)', line)
-        if not match:
+        if match:
+            speaker, content = match.groups()
+            current_speaker = speaker
+        else:
             stripped = line.strip()
-            if stripped and not (re.match(r'^#{1,6}\s', stripped) or
-                                 re.fullmatch(r'[（(].*[）)]', stripped) or
-                                 re.fullmatch(r'\[\d+(?:\s*[,，、]\s*\d+)*\]', stripped)):
+            if not stripped or re.match(r'^#{1,6}\s', stripped) or \
+                    re.fullmatch(r'[（(].*[）)]', stripped) or \
+                    re.fullmatch(r'(?:\[\d+\])+', stripped) or \
+                    re.fullmatch(r'\[\d+(?:\s*[,，、]\s*\d+)*\]', stripped):
+                continue
+            if current_speaker is None or re.match(r'^(?:[\u4e00-\u9fff]{1,12}|(?:Host|Guest|Narrator|Speaker)\d*)\s*[：:]', stripped, re.I):
                 raise ValueError(f'文稿第 {line_number} 行无法分配角色：{stripped[:80]}')
-            continue
-        speaker, content = match.groups()
+            speaker, content = current_speaker, stripped
         content = re.sub(r'\[\d+\]', '', content).strip()
         if not content:
             continue
-        while len(content) > TTS_TURN_LENGTH:
-            cut = max(content.rfind(mark, 0, TTS_TURN_LENGTH + 1) for mark in '。！？；.!?;') + 1
+        turn_length = TTS_TURN_LENGTH if re.search(r'[\u3400-\u9fff]', content) else ENGLISH_TURN_LENGTH
+        while len(content) > turn_length:
+            cut = max(content.rfind(mark, 0, turn_length + 1) for mark in '。！？；.!?;') + 1
             if cut < 40:
-                cut = max(content.rfind(mark, 0, TTS_TURN_LENGTH + 1) for mark in '，、,') + 1
-            cut = cut if cut >= 40 else TTS_TURN_LENGTH
+                cut = max(content.rfind(mark, 0, turn_length + 1) for mark in '，、,') + 1
+            if cut < 40:
+                # Keep English words intact when the turn has little punctuation.
+                space = content.rfind(' ', 40, turn_length + 1)
+                cut = space + 1 if space >= 40 else turn_length
             turns.append((speaker, content[:cut].strip()))
             content = content[cut:].strip()
         if content:
@@ -98,7 +119,7 @@ def script_segments(script, speakers=None):
     return turns
 
 
-def join_wav(chunks, destination):
+def join_wav(chunks, destination, speakers=None):
     params = None
     with wave.open(str(destination), 'wb') as output:
         for index, raw in enumerate(chunks):
@@ -111,7 +132,7 @@ def join_wav(chunks, destination):
                     output.setframerate(current[2])
                 elif current != params:
                     raise ValueError('语音片段的采样参数不一致，无法合成。')
-                if index:
+                if index and (speakers is None or speakers[index] != speakers[index - 1]):
                     output.writeframes(b'\0' * (current[0] * current[1] * current[2] // 4))
                 frames = segment.readframes(segment.getnframes())
                 rms = audioop.rms(frames, current[1])
@@ -124,7 +145,7 @@ def join_wav(chunks, destination):
     return destination
 
 
-async def render_audio(script, run_id, *, voices=None, speakers=None, client=None, on_step=None):
+async def render_audio(script, run_id, *, voices=None, speakers=None, pronunciation_rules=None, client=None, on_step=None):
     speakers = speaker_labels(2) if speakers is None else speakers
     voices = voices or DEFAULT_VOICES
     if not all(voices.get(role) for role in speakers):
@@ -154,7 +175,8 @@ async def render_audio(script, run_id, *, voices=None, speakers=None, client=Non
 
     async def synthesize(index, speaker, content):
         nonlocal completed
-        cache_key = hashlib.sha256(json.dumps([settings.TTS_MODEL, voices[speaker], content], ensure_ascii=False).encode()).hexdigest()
+        spoken = tts_pronunciation(content, pronunciation_rules)
+        cache_key = hashlib.sha256(json.dumps([settings.TTS_MODEL, voices[speaker], spoken], ensure_ascii=False).encode()).hexdigest()
         cache_file = cache_dir / f'{cache_key}.wav'
         async with limiter:
             if cache_file.is_file():
@@ -163,7 +185,7 @@ async def render_audio(script, run_id, *, voices=None, speakers=None, client=Non
                 for attempt in range(3):
                     try:
                         response = await asyncio.wait_for(client.audio.speech.create(
-                            model=settings.TTS_MODEL, voice=voices[speaker], input=content, response_format='wav',
+                            model=settings.TTS_MODEL, voice=voices[speaker], input=spoken, response_format='wav',
                         ), timeout=90)
                         with wave.open(io.BytesIO(response.content), 'rb') as wav:
                             if not wav.getnframes():
@@ -197,7 +219,7 @@ async def render_audio(script, run_id, *, voices=None, speakers=None, client=Non
         await asyncio.gather(*tasks, return_exceptions=True)
         raise
     try:
-        join_wav(chunks, temporary)
+        join_wav(chunks, temporary, [speaker for speaker, _ in turns])
         temporary.replace(destination)
     except Exception:
         temporary.unlink(missing_ok=True)

@@ -20,7 +20,7 @@ def test_agent_workflow_preserves_catalog_and_gutenberg_excerpts():
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
         async with async_sessionmaker(engine, expire_on_commit=False)() as db:
-            listing = BookList(name='test', source_type='csv')
+            listing = BookList(user_id=1, name='test', source_type='csv')
             db.add(listing)
             await db.flush()
             book = Book(book_list_id=listing.id, title='Pride and Prejudice', author='Jane Austen')
@@ -55,7 +55,7 @@ def test_article_agent_can_cite_original_excerpt_without_reader_reviews():
             await connection.run_sync(Base.metadata.create_all)
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         async with sessions() as db:
-            listing = BookList(name='test', source_type='csv')
+            listing = BookList(user_id=1, name='test', source_type='csv')
             db.add(listing)
             await db.flush()
             book = Book(book_list_id=listing.id, title='Pride and Prejudice', author='Jane Austen')
@@ -100,7 +100,7 @@ def test_article_accepts_attributed_publisher_information_without_reviews():
             await connection.run_sync(Base.metadata.create_all)
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         async with sessions() as db:
-            listing = BookList(name='test', source_type='csv')
+            listing = BookList(user_id=1, name='test', source_type='csv')
             db.add(listing)
             await db.flush()
             book = Book(book_list_id=listing.id, title='Test Book', author='Author')

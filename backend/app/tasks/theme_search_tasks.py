@@ -28,7 +28,7 @@ async def _run_theme_search_async(search_id):
                 await db.commit()
 
             books = await discover_theme_books(search.theme, search.limit, on_step=on_step)
-            listing = BookList(name=f'主题：{search.theme}'[:255], source_type='theme')
+            listing = BookList(name=f'主题：{search.theme}'[:255], source_type='theme', user_id=search.user_id)
             db.add(listing)
             await db.flush()
             for index, item in enumerate(books, 1):

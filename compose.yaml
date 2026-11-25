@@ -1,0 +1,85 @@
+name: bookcast
+
+x-backend: &backend
+  build: ./backend
+  env_file: ./backend/.env
+  environment:
+    DATABASE_URL: sqlite+aiosqlite:////data/book_research.db
+    REDIS_URL: redis://redis:6379/0
+    DEBUG: "false"
+  volumes:
+    - bookcast_data:/data
+    - bookcast_audio:/app/generated_audio
+  restart: unless-stopped
+  depends_on:
+    redis:
+      condition: service_healthy
+
+services:
+  volume-init:
+    image: redis:7-alpine
+    user: "0"
+    command: ["sh", "-c", "chown -R 10001:10001 /data /audio"]
+    volumes:
+      - bookcast_data:/data
+      - bookcast_audio:/audio
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  api:
+    <<: *backend
+    depends_on:
+      redis:
+        condition: service_healthy
+      volume-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  research-worker:
+    <<: *backend
+    command: ["python", "worker.py", "--queue", "research"]
+    depends_on:
+      api:
+        condition: service_healthy
+
+  podcast-worker:
+    <<: *backend
+    command: ["python", "worker.py", "--queue", "podcast"]
+    depends_on:
+      api:
+        condition: service_healthy
+
+  audio-worker:
+    <<: *backend
+    command: ["python", "worker.py", "--queue", "audio"]
+    depends_on:
+      api:
+        condition: service_healthy
+
+  web:
+    build: ./frontend
+    ports:
+      - "127.0.0.1:5173:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  bookcast_data:
+  bookcast_audio:
+  redis_data:

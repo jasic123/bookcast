@@ -135,7 +135,7 @@ def test_lost_theme_search_job_becomes_retryable():
             await conn.run_sync(Base.metadata.create_all)
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         async with sessions() as db:
-            search = ThemeSearch(theme='爱情', limit=10, status='queued', job_id='lost-job')
+            search = ThemeSearch(user_id=1, theme='爱情', limit=10, status='queued', job_id='lost-job')
             db.add(search)
             await db.commit()
             search_id = search.id
@@ -189,7 +189,7 @@ def test_theme_search_worker_persists_book_and_both_evidence_sources():
             await conn.run_sync(Base.metadata.create_all)
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         async with sessions() as db:
-            search = ThemeSearch(theme='死亡', limit=10, status='queued')
+            search = ThemeSearch(user_id=1, theme='死亡', limit=10, status='queued')
             db.add(search)
             await db.commit()
             search_id = search.id

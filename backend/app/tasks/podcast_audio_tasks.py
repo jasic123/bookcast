@@ -6,6 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.database import engine
 from app.models.podcast_run import PodcastRun
+from app.models.research import Research
+from app.models.book import Book, BookList
+from app.models.user import PronunciationRule
+from sqlalchemy import select
 from app.services.podcast_audio import render_audio, speaker_labels
 
 logger = logging.getLogger(__name__)
@@ -26,7 +30,13 @@ async def _run_podcast_audio_async(run_id):
 
             draft = (run.result or {}).get('drafts', [])[-1]['content']
             speakers = speaker_labels((run.request or {}).get('speaker_count', 2))
-            audio_path = await render_audio(draft, run_id, voices=run.audio_voices, speakers=speakers, on_step=on_step)
+            owner_id = (await db.execute(select(BookList.user_id).join(Book, Book.book_list_id == BookList.id)
+                        .join(Research, Research.book_id == Book.id)
+                        .where(Research.id == run.research_id))).scalar_one()
+            rules = (await db.execute(select(PronunciationRule.original, PronunciationRule.spoken)
+                     .where(PronunciationRule.user_id == owner_id))).all()
+            audio_path = await render_audio(draft, run_id, voices=run.audio_voices, speakers=speakers,
+                                            pronunciation_rules=rules, on_step=on_step)
             run.audio_file = audio_path.name
             run.audio_status = 'completed'
             run.audio_step = '音频已生成'

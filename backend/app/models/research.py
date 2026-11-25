@@ -48,6 +48,7 @@ class Research(Base):
 
     # Status
     status = Column(String(50), default="pending")  # pending, running, completed, failed
+    job_id = Column(String(64), nullable=True, index=True)
     progress = Column(Float, default=0.0)  # 0.0 to 1.0
     current_step = Column(String(100), nullable=True)
     error_message = Column(Text, nullable=True)

@@ -8,6 +8,7 @@ from app.core.database import Base
 class ThemeSearch(Base):
     __tablename__ = 'theme_searches'
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)
     theme = Column(String(200), nullable=False)
     limit = Column(Integer, nullable=False, default=10)
     status = Column(String(30), nullable=False, default='queued')

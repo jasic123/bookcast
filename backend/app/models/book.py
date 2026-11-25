@@ -13,6 +13,7 @@ class BookList(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)
     source_type = Column(String(50), nullable=False)  # amazon, csv, etc.
     source_url = Column(Text, nullable=True)
     list_date = Column(DateTime, nullable=True)  # When the list was published

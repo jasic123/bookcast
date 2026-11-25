@@ -17,7 +17,9 @@ class Settings(BaseSettings):
     APP_NAME: str = "Book Podcast Research"
     APP_VERSION: str = "0.1.0"
     DEBUG: bool = False
-    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
+    CORS_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000"
+    AUTH_REGISTRATION_CODE: str = ""
+    SESSION_COOKIE_SECURE: bool = False
 
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///./book_research.db"

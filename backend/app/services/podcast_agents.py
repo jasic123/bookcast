@@ -181,7 +181,7 @@ async def run_podcast_flow(request, *, client=None, search=None, on_step=None, c
                   '如果提供上一版脚本和评审意见，须逐条修改上一版，保留已核实且无需更改的内容。'
                   '如果 feedback.selected_by_user 为 true，只按照 feedback.issues 中用户选定的意见定向修改；保留其他观点和段落，不要重写整稿。'
                   '区分出版社简介、读者意见、专业评论和原文节选，原文节选不代表全书。'
-                  '事实、情节和评价必须在对应句子后标注[来源ID]，不得编造对话事实、情节、评论或来源；'
+                  '事实、情节和评价必须在对应句子后标注[来源ID]，引用不要单独成行；不得编造对话事实、情节、评论或来源；'
                   '资料不足时指出缺口，主题未匹配时坦诚说明。根据目标时长展开，不得用重复内容凑字数。'
                   '只输出完整口播稿，不要输出JSON或额外说明。')
         content = await asyncio.wait_for(client.chat_completion([

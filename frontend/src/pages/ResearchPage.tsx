@@ -4,7 +4,7 @@ import { booksApi, healthApi, researchApi } from '../services/api'
 import type { Book, Research } from '../types'
 import PodcastPanel from './PodcastPanel'
 
-export default function ResearchPage() {
+export default function ResearchPage({ userId }: { userId: number }) {
   const { bookId } = useParams<{ bookId: string }>()
   const [searchParams] = useSearchParams()
   const [book, setBook] = useState<Book | null>(null)
@@ -480,7 +480,7 @@ export default function ResearchPage() {
             </div>}
           </div>
 
-          <PodcastPanel researchId={currentResearch.id} />
+          <PodcastPanel researchId={currentResearch.id} userId={userId} />
 
           <div className="bg-white shadow rounded-lg p-6 mb-6">
             <h2 className="text-lg font-semibold text-gray-900 mb-2">书评整理</h2>

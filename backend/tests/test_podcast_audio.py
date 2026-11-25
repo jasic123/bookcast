@@ -7,9 +7,11 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 from openai import APIStatusError
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.core.database import Base, get_db
 from app.main import app
-from app.services.podcast_audio import create_custom_voice, render_audio, script_segments, speaker_labels
+from app.services.podcast_audio import create_custom_voice, join_wav, render_audio, script_segments, speaker_labels, tts_pronunciation
 
 
 def _wav(value):
@@ -20,6 +22,34 @@ def _wav(value):
         audio.setframerate(24000)
         audio.writeframes(bytes([value, 0]) * 240)
     return buffer.getvalue()
+
+
+def test_standalone_citation_line_is_not_a_speaker():
+    script = '\u4e3b\u6301\u4eba\uff1aA claim.[238]\n[238][240][242]\n\u5609\u5bbe\uff1aA response.[240]'
+    assert script_segments(script) == [('\u4e3b\u6301\u4eba', 'A claim.'), ('\u5609\u5bbe', 'A response.')]
+
+
+def test_long_english_turn_splits_at_word_boundaries():
+    sentence = 'This English sentence has several distinct words without punctuation '
+    script = '主持人：' + sentence * 5
+    turns = script_segments(script, ['主持人'])
+    assert len(turns) > 1
+    assert max(len(content) for _, content in turns) > 120
+    assert ' '.join(content for _, content in turns) == script.split('：', 1)[1].strip()
+
+
+def test_tested_pronunciations_change_only_tts_input():
+    script = '主持人：A groundbreaking novel by Cixin Liu.'
+    spoken = tts_pronunciation(script, [('groundbreaking', 'ground breaking'), ('Cixin Liu', 'Tsee shin Lyoo')])
+    assert spoken == '主持人：A ground breaking novel by Tsee shin Lyoo.'
+    assert script == '主持人：A groundbreaking novel by Cixin Liu.'
+    assert tts_pronunciation('主持人：这本书讲述刘慈欣的故事。', [('刘慈欣', '刘磁心')]) == '主持人：这本书讲述刘磁心的故事。'
+
+
+def test_wav_pause_only_when_speaker_changes(tmp_path):
+    path = join_wav([_wav(1)] * 3, tmp_path / 'episode.wav', ['主持人', '主持人', '嘉宾'])
+    with wave.open(str(path), 'rb') as audio:
+        assert audio.getnframes() == 3 * 240 + 24000 // 4
 
 
 def test_speech_calls_overlap_but_audio_keeps_script_order():
@@ -169,6 +199,14 @@ def test_stage_directions_are_skipped_but_unknown_lines_report_location():
         script_segments('主持人：欢迎。\n旁白：突然响起音乐。\n嘉宾：你好。')
 
 
+def test_unlabelled_paragraphs_continue_the_previous_speaker():
+    script = '主持人：Opening.\n\nA longer explanation follows.\n嘉宾：Reply.\nAnother point.'
+    assert script_segments(script) == [
+        ('主持人', 'Opening.'), ('主持人', 'A longer explanation follows.'),
+        ('嘉宾', 'Reply.'), ('嘉宾', 'Another point.'),
+    ]
+
+
 def test_solo_and_panel_audio_use_selected_roles_and_voices():
     async def check():
         calls = []
@@ -202,22 +240,37 @@ def test_solo_and_panel_audio_use_selected_roles_and_voices():
 
 def test_voice_upload_requires_consent_and_matches_provider_contract():
     async def check():
+        engine = create_async_engine('sqlite+aiosqlite:///:memory:')
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async def test_db():
+            async with sessions() as session:
+                yield session
+        app.dependency_overrides[get_db] = test_db
         def provider(request):
             assert request.url.path == '/v1/uploads/audio/voice'
             assert b'customName' in request.content and b'file' in request.content
             return httpx.Response(200, json={'uri': 'speech:test:voice'})
 
-        async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as provider_client:
-            assert await create_custom_voice(b'RIFFdata', 'voice.wav', 'audio/wav', 'hello', 'sample', client=provider_client) == 'speech:test:voice'
+        try:
+            async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as provider_client:
+                assert await create_custom_voice(b'RIFFdata', 'voice.wav', 'audio/wav', 'hello', 'sample', client=provider_client) == 'speech:test:voice'
 
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
-            payload = {'data': {'name': 'sample', 'transcript': 'hello', 'consent': 'false'},
-                       'files': {'sample': ('voice.wav', b'RIFFdata', 'audio/wav')}}
-            with patch('app.api.podcasts.create_custom_voice', new_callable=AsyncMock) as upload:
-                assert (await client.post('/api/podcasts/voices', **payload)).status_code == 400
-                upload.assert_not_awaited()
-                payload['data']['consent'] = 'true'
-                upload.return_value = 'speech:test:voice'
-                assert (await client.post('/api/podcasts/voices', **payload)).json()['voice_id'] == 'speech:test:voice'
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+                payload = {'data': {'name': 'sample', 'transcript': 'hello', 'consent': 'false'},
+                           'files': {'sample': ('voice.wav', b'RIFFdata', 'audio/wav')}}
+                with patch('app.api.podcasts.create_custom_voice', new_callable=AsyncMock) as upload:
+                    assert (await client.post('/api/podcasts/voices', **payload)).status_code == 400
+                    upload.assert_not_awaited()
+                    payload['data']['consent'] = 'true'
+                    upload.return_value = 'speech:test:voice'
+                    assert (await client.post('/api/podcasts/voices', **payload)).json()['voice_id'] == 'speech:test:voice'
+                payload['data']['name'] = 'large-sample'
+                payload['files'] = {'sample': ('voice.wav', b'0' * (10 * 1024 * 1024 + 1), 'audio/wav')}
+                assert (await client.post('/api/podcasts/voices', **payload)).status_code == 413
+        finally:
+            app.dependency_overrides.pop(get_db, None)
+            await engine.dispose()
 
     asyncio.run(check())

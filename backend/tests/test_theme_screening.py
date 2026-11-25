@@ -19,7 +19,7 @@ def test_screening_searches_and_persists_details():
             await conn.run_sync(Base.metadata.create_all)
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         async with sessions() as db:
-            book_list = BookList(name='Test', source_type='csv')
+            book_list = BookList(user_id=1, name='Test', source_type='csv')
             db.add(book_list)
             await db.flush()
             book = Book(title='Test book', book_list_id=book_list.id)
@@ -72,7 +72,7 @@ def test_candidate_reaches_material_assessment():
             await conn.run_sync(Base.metadata.create_all)
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         async with sessions() as db:
-            book_list = BookList(name='Test', source_type='csv')
+            book_list = BookList(user_id=1, name='Test', source_type='csv')
             db.add(book_list)
             await db.flush()
             book = Book(title='Test book', book_list_id=book_list.id)
@@ -101,7 +101,7 @@ def test_review_digest_preserves_source_basis_and_caches():
             await conn.run_sync(Base.metadata.create_all)
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         async with sessions() as db:
-            listing = BookList(name='Test', source_type='csv')
+            listing = BookList(user_id=1, name='Test', source_type='csv')
             db.add(listing)
             await db.flush()
             book = Book(title='Test book', book_list_id=listing.id)
@@ -141,7 +141,7 @@ def test_review_article_requires_valid_sources_and_caches():
             await conn.run_sync(Base.metadata.create_all)
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         async with sessions() as db:
-            listing = BookList(name='Test', source_type='csv')
+            listing = BookList(user_id=1, name='Test', source_type='csv')
             db.add(listing)
             await db.flush()
             book = Book(title='Test book', book_list_id=listing.id)

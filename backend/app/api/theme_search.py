@@ -10,11 +10,13 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.auth import current_user, owned_search
 from app.core.queue import enqueue_theme_search, research_queue
 from app.models.book import Book
 from app.models.theme_search import ThemeBookEvidence, ThemeSearch
+from app.models.user import User
 
-router = APIRouter(prefix='/theme-search', tags=['theme-search'])
+router = APIRouter(prefix='/theme-search', tags=['theme-search'], dependencies=[Depends(current_user)])
 
 
 class ThemeSearchCreate(BaseModel):
@@ -79,8 +81,8 @@ async def _response(db, search):
 
 
 @router.post('/')
-async def create_theme_search(request: ThemeSearchCreate, db: AsyncSession = Depends(get_db)):
-    search = ThemeSearch(theme=request.theme, limit=request.limit, status='queued')
+async def create_theme_search(request: ThemeSearchCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
+    search = ThemeSearch(theme=request.theme, limit=request.limit, status='queued', user_id=user.id)
     db.add(search)
     await db.commit()
     await db.refresh(search)
@@ -97,14 +99,14 @@ async def create_theme_search(request: ThemeSearchCreate, db: AsyncSession = Dep
 
 
 @router.get('/latest')
-async def latest_theme_search(db: AsyncSession = Depends(get_db)):
-    search = (await db.execute(select(ThemeSearch).order_by(ThemeSearch.id.desc()).limit(1))).scalar_one_or_none()
+async def latest_theme_search(db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
+    search = (await db.execute(select(ThemeSearch).where(ThemeSearch.user_id == user.id).order_by(ThemeSearch.id.desc()).limit(1))).scalar_one_or_none()
     return await _response(db, search) if search else None
 
 
 @router.get('/{search_id}')
-async def get_theme_search(search_id: int, db: AsyncSession = Depends(get_db)):
-    search = await db.get(ThemeSearch, search_id)
+async def get_theme_search(search_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
+    search = await owned_search(db, search_id, user)
     if not search:
         raise HTTPException(status_code=404, detail='找书任务不存在。')
     return await _response(db, search)

@@ -12,22 +12,24 @@ import asyncio
 import logging
 
 from app.core.database import get_db
+from app.core.auth import current_user, owned_book, owned_research
 from app.core.queue import creation_guard, enqueue_research, get_job_status
 from app.models.research import Research, ThemeMatch, Source, SourceType, ReviewDigest, ReviewArticle
-from app.models.book import Book
+from app.models.book import Book, BookList
+from app.models.user import User
 from app.schemas.research import ResearchCreate, ResearchResponse
 from app.services.llm_client import LLMClient
 from app.services.research_agents import run_specialist
 from app.services.review_pipeline import curate_review_sources, parse_model_json
 
-router = APIRouter(prefix="/research", tags=["research"])
+router = APIRouter(prefix="/research", tags=["research"], dependencies=[Depends(current_user)])
 logger = logging.getLogger(__name__)
 
 
 @router.post("/", response_model=dict)
 async def create_research(
     request: ResearchCreate,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db), user: User = Depends(current_user)
 ):
     """
     Create a new research session for a book.
@@ -41,13 +43,7 @@ async def create_research(
         status: Current status
     """
     # Verify book exists
-    result = await db.execute(
-        select(Book).where(Book.id == request.book_id)
-    )
-    book = result.scalar_one_or_none()
-
-    if not book:
-        raise HTTPException(status_code=404, detail="Book not found")
+    book = await owned_book(db, request.book_id, user)
 
     try:
         async with creation_guard(f'research:{request.book_id}'):
@@ -63,6 +59,8 @@ async def create_research(
             await db.refresh(research)
             try:
                 job_id = enqueue_research(research.id)
+                research.job_id = job_id
+                await db.commit()
             except RedisError:
                 research.status = 'failed'
                 research.error_message = '无法连接任务队列，请检查 Redis 服务。'
@@ -82,13 +80,14 @@ async def create_research(
 
 
 @router.get("/{research_id}", response_model=ResearchResponse)
-async def get_research(research_id: int, db: AsyncSession = Depends(get_db)):
+async def get_research(research_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Get research status and results."""
     result = await db.execute(
         select(Research).options(
             selectinload(Research.theme_matches).selectinload(ThemeMatch.details), selectinload(Research.sources),
             selectinload(Research.material_assessment),
-        ).where(Research.id == research_id)
+        ).join(Book, Research.book_id == Book.id).join(BookList, Book.book_list_id == BookList.id)
+        .where(Research.id == research_id, BookList.user_id == user.id)
     )
     research = result.scalar_one_or_none()
 
@@ -99,9 +98,9 @@ async def get_research(research_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{research_id}/reviews")
-async def get_review_digest(research_id: int, db: AsyncSession = Depends(get_db)):
+async def get_review_digest(research_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Summarize identifiable reviews using only collected source content."""
-    research = await db.get(Research, research_id)
+    research = await owned_research(db, research_id, user)
     if not research:
         raise HTTPException(status_code=404, detail="Research not found")
     if research.status != "completed":
@@ -164,9 +163,9 @@ async def get_review_digest(research_id: int, db: AsyncSession = Depends(get_db)
 
 
 @router.post("/{research_id}/review-article")
-async def create_review_article(research_id: int, db: AsyncSession = Depends(get_db)):
+async def create_review_article(research_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Synthesize collected reviews and retain source attribution."""
-    research = await db.get(Research, research_id)
+    research = await owned_research(db, research_id, user)
     if not research:
         raise HTTPException(status_code=404, detail="Research not found")
     if research.status != "completed":
@@ -295,9 +294,10 @@ async def create_review_article(research_id: int, db: AsyncSession = Depends(get
 @router.get("/book/{book_id}", response_model=List[ResearchResponse])
 async def list_research_for_book(
     book_id: int,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db), user: User = Depends(current_user)
 ):
     """List all research sessions for a book."""
+    await owned_book(db, book_id, user)
     result = await db.execute(
         select(Research)
         .options(selectinload(Research.theme_matches).selectinload(ThemeMatch.details), selectinload(Research.sources),
@@ -310,7 +310,7 @@ async def list_research_for_book(
 
 
 @router.get("/job/{job_id}", response_model=dict)
-async def get_job_status_endpoint(job_id: str):
+async def get_job_status_endpoint(job_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """
     Get the status of a background research job.
 
@@ -320,4 +320,9 @@ async def get_job_status_endpoint(job_id: str):
     - finished: Job completed successfully
     - failed: Job failed with an error
     """
+    research = (await db.execute(select(Research).join(Book, Research.book_id == Book.id)
+        .join(BookList, Book.book_list_id == BookList.id).where(
+            Research.job_id == job_id, BookList.user_id == user.id))).scalar_one_or_none()
+    if not research:
+        raise HTTPException(status_code=404, detail='任务不存在。')
     return get_job_status(job_id)

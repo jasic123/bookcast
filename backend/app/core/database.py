@@ -41,14 +41,23 @@ async def get_db() -> AsyncSession:
 
 async def init_db():
     """Initialize database - create all tables."""
+    import app.models  # Register every model before create_all.
     if engine.dialect.name == 'sqlite':
         async with engine.connect() as conn:
             await conn.execute(text('PRAGMA journal_mode=WAL'))
             await conn.execute(text('PRAGMA synchronous=NORMAL'))
             await conn.commit()
     async with engine.begin() as conn:
+        if engine.dialect.name == 'sqlite':
+            for table in ('book_lists', 'theme_searches'):
+                columns = (await conn.execute(text(f'PRAGMA table_info({table})'))).all()
+                if columns and 'user_id' not in {column[1] for column in columns}:
+                    await conn.execute(text(f'ALTER TABLE {table} ADD COLUMN user_id INTEGER REFERENCES users(id)'))
         await conn.run_sync(Base.metadata.create_all)
         if engine.dialect.name == 'sqlite':
+            research_columns = (await conn.execute(text('PRAGMA table_info(researches)'))).all()
+            if research_columns and 'job_id' not in {column[1] for column in research_columns}:
+                await conn.execute(text('ALTER TABLE researches ADD COLUMN job_id VARCHAR(64)'))
             columns = (await conn.execute(text('PRAGMA table_info(podcast_runs)'))).all()
             existing = {column[1] for column in columns}
             for name, kind in {'audio_status': 'VARCHAR(30)', 'audio_step': 'VARCHAR(100)',

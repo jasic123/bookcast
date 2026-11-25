@@ -9,6 +9,7 @@ from app.main import app
 from app.models.book import Book, BookList
 from app.models.research import Research
 from app.models.podcast_run import PodcastRun
+from app.models.user import SavedVoice
 
 
 def test_duplicate_podcast_creation_returns_existing_run():
@@ -18,7 +19,7 @@ def test_duplicate_podcast_creation_returns_existing_run():
             await conn.run_sync(Base.metadata.create_all)
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         async with sessions() as db:
-            listing = BookList(name='Test', source_type='csv')
+            listing = BookList(user_id=1, name='Test', source_type='csv')
             db.add(listing)
             await db.flush()
             book = Book(title='Test book', book_list_id=listing.id)
@@ -57,7 +58,9 @@ def test_panel_audio_requires_each_selected_voice():
             await conn.run_sync(Base.metadata.create_all)
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         async with sessions() as db:
-            listing = BookList(name='Test', source_type='csv')
+            db.add_all([SavedVoice(user_id=1, name=name, voice_id=name, language='zh')
+                        for name in ('host', 'one', 'two')])
+            listing = BookList(user_id=1, name='Test', source_type='csv')
             db.add(listing)
             await db.flush()
             book = Book(title='Test book', book_list_id=listing.id)
@@ -104,7 +107,7 @@ def test_failed_podcast_retry_keeps_checkpoint():
             await conn.run_sync(Base.metadata.create_all)
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         async with sessions() as db:
-            listing = BookList(name='Test', source_type='csv')
+            listing = BookList(user_id=1, name='Test', source_type='csv')
             db.add(listing)
             await db.flush()
             book = Book(title='Test book', book_list_id=listing.id)
@@ -148,7 +151,7 @@ def test_selected_review_issues_queue_a_targeted_revision():
             await conn.run_sync(Base.metadata.create_all)
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         async with sessions() as db:
-            listing = BookList(name='Test', source_type='csv')
+            listing = BookList(user_id=1, name='Test', source_type='csv')
             db.add(listing)
             await db.flush()
             book = Book(title='Test book', book_list_id=listing.id)

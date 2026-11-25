@@ -18,7 +18,7 @@ def test_rq_failure_marks_domain_task_failed():
             await conn.run_sync(Base.metadata.create_all)
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         async with sessions() as db:
-            listing = BookList(name='Test', source_type='csv')
+            listing = BookList(user_id=1, name='Test', source_type='csv')
             db.add(listing)
             await db.flush()
             book = Book(title='Test book', book_list_id=listing.id)

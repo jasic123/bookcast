@@ -3,8 +3,16 @@ import ThemeSearchPage from './pages/ThemeSearchPage'
 import BookListPage from './pages/BookListPage'
 import ResearchPage from './pages/ResearchPage'
 import SingleBookPage from './pages/SingleBookPage'
+import LoginPage from './pages/LoginPage'
+import { useEffect, useState } from 'react'
+import { authApi } from './services/api'
 
 function App() {
+  const [user, setUser] = useState<{ id: number; username: string } | null>(null)
+  const [checking, setChecking] = useState(true)
+  useEffect(() => { authApi.me().then(setUser).catch(() => {}).finally(() => setChecking(false)) }, [])
+  if (checking) return <p className="p-6">正在检查登录状态…</p>
+  if (!user) return <LoginPage onLogin={setUser} />
   return (
     <Router>
       <div className="min-h-screen bg-gray-50">
@@ -30,6 +38,8 @@ function App() {
                 >
                   历史书单
                 </Link>
+                <span className="text-sm text-gray-500 self-center">{user.username}</span>
+                <button className="text-sm text-blue-700" onClick={() => authApi.logout().finally(() => setUser(null))}>退出</button>
               </div>
             </div>
           </div>
@@ -40,7 +50,7 @@ function App() {
             <Route path="/" element={<ThemeSearchPage />} />
             <Route path="/books" element={<BookListPage />} />
             <Route path="/single-book" element={<SingleBookPage />} />
-            <Route path="/research/:bookId" element={<ResearchPage />} />
+            <Route path="/research/:bookId" element={<ResearchPage userId={user.id} />} />
           </Routes>
         </main>
       </div>

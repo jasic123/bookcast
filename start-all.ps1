@@ -48,6 +48,21 @@ if (-not (Test-Port 8000)) {
         -RedirectStandardError (Join-Path $logs 'api.err.log') | Out-Null
 }
 Wait-Port 8000
+try {
+    $routes = Invoke-RestMethod 'http://127.0.0.1:8000/openapi.json' -TimeoutSec 3
+    if (-not ($routes.paths.PSObject.Properties.Name -contains '/api/auth/register')) {
+        $ownerPid = (Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue |
+            Select-Object -First 1 -ExpandProperty OwningProcess)
+        throw "8000 端口仍是旧版 API（PID: $ownerPid）。请用管理员 PowerShell 关闭它，再运行 start-all.ps1。"
+    }
+} catch {
+    throw "API 版本检查失败：$($_.Exception.Message)"
+}
+$viteEnv = Join-Path $frontend '.env.local'
+if (Test-Path $viteEnv) {
+    $lines = Get-Content $viteEnv | Where-Object { $_ -notmatch '^BOOKCAST_API_PORT=' }
+    @($lines) + 'BOOKCAST_API_PORT=8000' | Set-Content -Path $viteEnv -Encoding utf8
+}
 
 Push-Location $backend
 try {

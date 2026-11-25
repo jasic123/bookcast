@@ -346,10 +346,20 @@ class ResearchOrchestrator:
                 )
 
             if is_candidate:
-                assessment_result = await run_specialist(
-                    "editor_agent", "评估证据和研究资料缺口",
-                    {"title": book.title, "author": book.author, "themes": theme_data, "sources": source_data}, editor_agent,
-                )
+                try:
+                    assessment_result = await run_specialist(
+                        "editor_agent", "评估证据和研究资料缺口",
+                        {"title": book.title, "author": book.author, "themes": theme_data, "sources": source_data}, editor_agent,
+                    )
+                except Exception as error:
+                    logger.warning("Research %s material assessment unavailable: %s", research.id, type(error).__name__)
+                    assessment_result = {
+                        "overall_assessment": "needs_review",
+                        "reasoning": "资料已收集，但模型评估暂时不可用；请核对来源后再生成内容。",
+                        "material_gaps": ["资料充分度尚未通过模型评估"] +
+                                         (["缺少可核实的目标书籍资料"] if not unique_sources else []),
+                        "suggested_searches": [],
+                    }
             else:
                 pending = any(tm["status"] == "pending" for tm in theme_matches)
                 assessment_result = {

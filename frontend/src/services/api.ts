@@ -22,10 +22,32 @@ export type ThemeSearch = {
 
 const api = axios.create({
   baseURL: '/api',
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
   },
 })
+
+export const authApi = {
+  me: async (): Promise<{ id: number; username: string }> => (await api.get('/auth/me')).data,
+  register: async (username: string, password: string, registration_code: string): Promise<{ id: number; username: string }> =>
+    (await api.post('/auth/register', { username, password, registration_code })).data,
+  login: async (username: string, password: string): Promise<{ id: number; username: string }> =>
+    (await api.post('/auth/login', { username, password })).data,
+  logout: async (): Promise<void> => { await api.post('/auth/logout') },
+}
+
+export type SavedVoice = { id: number; name: string; voice_id: string; language: 'zh' | 'en' }
+export type PronunciationRule = { id: number; original: string; spoken: string }
+export const voiceApi = {
+  list: async (): Promise<SavedVoice[]> => (await api.get('/voices')).data,
+  restore: async (voice_id: string): Promise<SavedVoice> => (await api.post('/voices/restore', { voice_id })).data,
+  remove: async (id: number): Promise<void> => { await api.delete('/voices/saved/' + id) },
+  rules: async (): Promise<PronunciationRule[]> => (await api.get('/voices/pronunciations')).data,
+  saveRule: async (original: string, spoken: string): Promise<PronunciationRule> =>
+    (await api.post('/voices/pronunciations', { original, spoken })).data,
+  removeRule: async (id: number): Promise<void> => { await api.delete('/voices/pronunciations/' + id) },
+}
 
 export const healthApi = {
   checkQueue: async (queue: 'research' | 'podcast' | 'audio'): Promise<string | null> => {
@@ -55,12 +77,13 @@ export const podcastApi = {
   revise: async (id: number, reviewIteration: number, issueIndices: number[]): Promise<PodcastRun> => (await api.post(`/podcasts/${id}/revise`, { review_iteration: reviewIteration, issue_indices: issueIndices })).data,
   latest: async (researchId: number): Promise<PodcastRun | null> => (await api.get(`/podcasts/research/${researchId}`)).data,
   createAudio: async (id: number, voices: Record<string, string>, accept_review_issues: boolean): Promise<PodcastRun> => (await api.post(`/podcasts/${id}/audio`, { voices, accept_review_issues })).data,
-  uploadVoice: async (sample: File, transcript: string, name: string): Promise<{ voice_id: string }> => {
+  uploadVoice: async (sample: File, transcript: string, name: string, language: 'zh' | 'en'): Promise<{ voice_id: string }> => {
     const form = new FormData()
     form.append('sample', sample)
     form.append('transcript', transcript)
     form.append('name', name)
     form.append('consent', 'true')
+    form.append('language', language)
     return (await api.post('/podcasts/voices', form, { headers: { 'Content-Type': undefined }, timeout: 120000 })).data
   },
 }
@@ -73,7 +96,7 @@ export const themeSearchApi = {
 
 // Books API
 export const booksApi = {
-  searchSingle: async (title: string, author = ''): Promise<{ books: Array<{ title: string; author: string; work_key: string | null; first_published: number | null; catalog_url: string | null; source: 'open_library' | 'web'; evidence_url?: string; evidence_excerpt?: string }>; references?: Array<{ title: string; url: string }> }> =>
+  searchSingle: async (title: string, author = ''): Promise<{ books: Array<{ title: string; author: string; work_key: string | null; first_published: number | null; catalog_url: string | null; source: 'open_library' | 'web'; evidence_url?: string; evidence_excerpt?: string; identity_note?: string }>; references?: Array<{ title: string; url: string }> }> =>
     (await api.get('/books/search', { params: { title, author } })).data,
   addSingle: async (book: { title: string; author: string; work_key?: string }): Promise<Book> =>
     (await api.post('/books/single', book)).data,

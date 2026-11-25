@@ -12,10 +12,10 @@ import argparse
 import asyncio
 import logging
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from redis import Redis
 from rq import Worker, SimpleWorker
 
 from app.core.config import settings
-from app.core.queue import redis_conn
 from app.core.database import engine
 from app.models.research import Research
 from app.models.theme_search import ThemeSearch
@@ -67,13 +67,14 @@ def main():
     logger.info("Starting RQ worker for %s queue", queue)
     logger.info(f"Redis URL: {settings.REDIS_URL}")
 
-    # Create Redis connection
+    # RQ blocks while waiting for jobs; the API's short Redis read timeout would kill an idle worker.
+    worker_conn = Redis.from_url(settings.REDIS_URL, protocol=2, socket_connect_timeout=2)
 
     # Create and start worker
     worker_class = SimpleWorker if sys.platform == "win32" else Worker
     worker = worker_class(
         [queue],
-        connection=redis_conn,
+        connection=worker_conn,
         log_job_description=True,
         exception_handlers=[mark_failed_job],
     )

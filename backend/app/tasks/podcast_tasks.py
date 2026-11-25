@@ -62,7 +62,7 @@ async def _run_podcast_async(run_id):
                                             on_checkpoint=on_checkpoint)
             run.result = result
             run.status = 'completed' if result['decision'] == 'approved' else 'needs_revision'
-            run.current_step = '评审通过' if run.status == 'completed' else '达到修改上限，需人工审阅'
+            run.current_step = '评审通过' if run.status == 'completed' else '评审未通过，请选择修改意见或确认后试听'
             run.completed_at = datetime.utcnow()
             await db.commit()
             return {'status': run.status, 'run_id': run.id}

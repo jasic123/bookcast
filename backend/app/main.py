@@ -18,6 +18,9 @@ from app.api.books import router as books_router
 from app.api.research import router as research_router
 from app.api.podcasts import router as podcasts_router
 from app.api.theme_search import router as theme_search_router
+from app.api.auth import router as auth_router
+from app.api.voices import router as voices_router
+from app.core.auth import require_same_origin
 
 
 @asynccontextmanager
@@ -35,6 +38,13 @@ app = FastAPI(
     version=settings.APP_VERSION,
     lifespan=lifespan,
 )
+@app.middleware('http')
+async def same_origin_middleware(request, call_next):
+    try:
+        await require_same_origin(request)
+    except Exception:
+        return JSONResponse(status_code=403, content={'detail': '请求来源不可信。'})
+    return await call_next(request)
 
 # CORS middleware
 app.add_middleware(
@@ -50,6 +60,8 @@ app.include_router(books_router, prefix="/api")
 app.include_router(research_router, prefix="/api")
 app.include_router(podcasts_router, prefix="/api")
 app.include_router(theme_search_router, prefix="/api")
+app.include_router(auth_router, prefix="/api")
+app.include_router(voices_router, prefix="/api")
 
 
 @app.get("/")

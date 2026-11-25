@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { podcastApi } from '../services/api'
 
-const SAMPLE_TEXT = '今天想聊一本特别的书。它为什么让人念念不忘？我们一起看看。'
+const SAMPLE_TEXT = {
+  zh: '今天想聊一本特别的书。它为什么让人念念不忘？我们一起看看。',
+  en: 'Today we are talking about a remarkable book. Its story stays with us, and I want to know why.',
+}
 
 async function toWav(blob: Blob): Promise<File> {
   const context = new AudioContext()
@@ -22,14 +25,14 @@ async function toWav(blob: Blob): Promise<File> {
   return new File([bytes], 'voice-sample.wav', { type: 'audio/wav' })
 }
 
-export default function VoiceRecorder({ roles, onVoice }: { roles: string[]; onVoice: (role: string, voiceId: string) => void }) {
+export default function VoiceRecorder({ roles, language, onVoice }: { roles: string[]; language: 'zh' | 'en'; onVoice: (role: string, voiceId: string) => void }) {
   const recorder = useRef<MediaRecorder | null>(null)
   const stream = useRef<MediaStream | null>(null)
   const timer = useRef<number | null>(null)
   const [recording, setRecording] = useState(false)
   const [sample, setSample] = useState<File | null>(null)
   const [preview, setPreview] = useState('')
-  const [transcript, setTranscript] = useState(SAMPLE_TEXT)
+  const [transcript, setTranscript] = useState(SAMPLE_TEXT[language])
   const [name, setName] = useState('my_voice')
   const [role, setRole] = useState(roles[0] || '主持人')
   const [consent, setConsent] = useState(false)
@@ -74,7 +77,7 @@ export default function VoiceRecorder({ roles, onVoice }: { roles: string[]; onV
     if (!sample || !consent) return
     setUploading(true); setError('')
     try {
-      const result = await podcastApi.uploadVoice(sample, transcript.trim(), name.trim())
+      const result = await podcastApi.uploadVoice(sample, transcript.trim(), name.trim(), language)
       setVoiceId(result.voice_id)
       onVoice(role, result.voice_id)
     } catch (err: any) { setError(err.response?.data?.detail || '音色创建失败，请检查录音格式和语音服务配置。') }
@@ -83,8 +86,8 @@ export default function VoiceRecorder({ roles, onVoice }: { roles: string[]; onV
 
   return <div className="border rounded p-4 space-y-3 text-sm">
     <strong>录制个人音色</strong>
-    <p className="text-gray-600">在安静房间用正常语速、自然语调完整朗读下面的文字，约 8–10 秒；不要赶在截止前读完。先试听，若有杂音、回声或句尾被截断，请重录。上传文件时，录音对应文字必须与实际读出的内容一致。服务商要求账号完成实名认证。</p>
-    <p className="bg-gray-50 rounded p-2">{SAMPLE_TEXT}</p>
+    <p className="text-gray-600">请用{language === 'en' ? '英文' : '中文'}在安静房间自然朗读，语速和语调尽量接近你想要的节目效果；不必赶着读完示例句。先试听，若有杂音、回声或句尾被截断，请重录。录音对应文字必须与实际读出的内容完全一致；旧音色不会因重新录音自动更新，需创建新音色后重新配音。服务商要求账号完成实名认证。</p>
+    <p className="bg-gray-50 rounded p-2">{SAMPLE_TEXT[language]}</p>
     <div className="flex gap-2"><button type="button" onClick={recording ? stop : start} className="rounded bg-gray-800 text-white px-3 py-1">{recording ? '停止录音' : '开始录音（最多 10 秒）'}</button>
       <input type="file" accept=".wav,.mp3,audio/wav,audio/mpeg" onChange={(event) => { setSample(event.target.files?.[0] || null); setVoiceId('') }} /></div>
     {preview && <audio controls src={preview} className="w-full" />}
