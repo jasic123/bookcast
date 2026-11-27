@@ -40,13 +40,62 @@
 - 为主持人/嘉宾配置不同音色
 - 试听和更换语音身份
 
-### 🎙️ 语音合成对比
-- **原始录音**: 用户上传的 6 秒个人语音样本（WAV 格式）
-- **克隆音色**: AI 克隆生成的播客语音（MP3 格式）
-- 波形对比展示
+### 🎙️ 语音合成对比与播放
+
+**原始录音样本**（用户上传）
+<audio controls style="width: 100%; margin: 10px 0;">
+  <source src="samples/original_voice.wav" type="audio/wav">
+  您的浏览器不支持音频播放。
+</audio>
+<small>6 秒个人语音样本 · WAV 格式</small>
+
+**AI 克隆主持人语音**（系统生成）
+<audio controls style="width: 100%; margin: 10px 0;">
+  <source src="samples/podcast_host.wav" type="audio/wav">
+  您的浏览器不支持音频播放。
+</audio>
+<small>10 秒播客主持人音色 · 通过 TTS 合成</small>
+
+**AI 克隆嘉宾语音**（系统生成）
+<audio controls style="width: 100%; margin: 10px 0;">
+  <source src="samples/podcast_guest.wav" type="audio/wav">
+  您的浏览器不支持音频播放。
+</audio>
+<small>8 秒播客嘉宾音色 · 通过 TTS 合成</small>
 
 ### 🔄 端到端工作流
 从"输入主题"到"生成播客"的完整 8 步流程可视化
+
+---
+
+## 播客样例演示
+
+### 示例场景：《Lessons in Chemistry》主题研究
+
+**主题**: 身份、科学、女性赋权
+
+**系统流程**:
+1. 输入主题 ✓
+2. 从 Amazon 畅销榜获取候选书籍 ✓
+3. 基于 LLM 进行主题匹配筛选 ✓
+4. 检索书评、作者访谈、新闻报道 ✓
+5. 评估资料充分度（88% 通过）✓
+6. 生成播客文稿 ✓
+7. TTS 合成多角色语音 ✓
+8. 生成可播放的播客音频 ✓
+
+**生成的播客片段**
+<audio controls style="width: 100%; margin: 10px 0;">
+  <source src="samples/podcast_host.wav" type="audio/wav">
+  您的浏览器不支持音频播放。
+</audio>
+
+> 💡 完整的播客生成过程包括：
+> - 多 Agent 协作（规划 Agent、研究 Agent、撰稿 Agent、评审 Agent）
+> - 自动资料收集与评估
+> - 多轮迭代和审核
+> - 分角色 TTS 合成
+> - 音量标准化和音频拼接
 
 ## 技术栈
 
