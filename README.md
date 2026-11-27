@@ -43,25 +43,13 @@
 ### 🎙️ 语音合成对比与播放
 
 **原始录音样本**（用户上传）
-<audio controls style="width: 100%; margin: 10px 0;">
-  <source src="samples/original_voice.wav" type="audio/wav">
-  您的浏览器不支持音频播放。
-</audio>
-<small>6 秒个人语音样本 · WAV 格式</small>
+- [下载试听](samples/original_voice.wav) - 6 秒个人语音样本 · WAV 格式
 
 **AI 克隆主持人语音**（系统生成）
-<audio controls style="width: 100%; margin: 10px 0;">
-  <source src="samples/podcast_host.wav" type="audio/wav">
-  您的浏览器不支持音频播放。
-</audio>
-<small>10 秒播客主持人音色 · 通过 TTS 合成</small>
+- [下载试听](samples/podcast_host.wav) - 10 秒播客主持人音色 · 通过 TTS 合成
 
 **AI 克隆嘉宾语音**（系统生成）
-<audio controls style="width: 100%; margin: 10px 0;">
-  <source src="samples/podcast_guest.wav" type="audio/wav">
-  您的浏览器不支持音频播放。
-</audio>
-<small>8 秒播客嘉宾音色 · 通过 TTS 合成</small>
+- [下载试听](samples/podcast_guest.wav) - 8 秒播客嘉宾音色 · 通过 TTS 合成
 
 ### 🔄 端到端工作流
 从"输入主题"到"生成播客"的完整 8 步流程可视化
