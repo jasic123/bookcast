@@ -12,14 +12,55 @@
 2. **主题筛选**: 基于用户关注主题筛选候选书籍
 3. **资料检索**: 检索书评、访谈、出版信息等多源资料
 4. **充分度评估**: 评估主题匹配度和资料充分度
+5. **播客文稿生成**: 多 Agent 协作生成和评审播客文稿
+6. **TTS 语音合成**: 支持多语言和自定义音色的语音生成
+7. **用户认证与管理**: JWT 认证、音色保存和语音身份管理
+
+## 系统演示
+
+打开 [`DEMO_SHOWCASE.html`](./DEMO_SHOWCASE.html) 查看完整的前端界面演示，包含：
+
+### 🔍 主题找书
+- 输入关注主题（如"死亡""轮回""虚拟世界"）
+- 系统从 Amazon 畅销榜中筛选相关书籍
+- 显示主题匹配度和相关证据
+
+### 📊 搜索结果
+- 实时显示匹配进度
+- 每本书展示匹配理由和证据来源
+- 一键进行深度研究
+
+### 📖 单书研究
+- 资料统计（书评数、作者信息、新闻报道等）
+- 资料充分度评估
+- 播客文稿生成和语音合成
+
+### 🎤 语音身份管理
+- 保存多个个性化音色
+- 为主持人/嘉宾配置不同音色
+- 试听和更换语音身份
+
+### 🎙️ 语音合成对比
+- **原始录音**: 用户上传的 6 秒个人语音样本（WAV 格式）
+- **克隆音色**: AI 克隆生成的播客语音（MP3 格式）
+- 波形对比展示
+
+### 🔄 端到端工作流
+从"输入主题"到"生成播客"的完整 8 步流程可视化
 
 ## 技术栈
 
-- **后端**: Python 3.11+ / FastAPI / SQLAlchemy / Alembic
+- **后端**: Python 3.11+ / FastAPI / SQLAlchemy / Alembic / RQ
 - **前端**: React 18 / TypeScript / Vite / TailwindCSS
-- **数据库**: SQLite
-- **任务队列**: RQ + Redis
-- **外部服务**: Tavily API / OpenAI-compatible LLM API
+- **认证**: JWT / Cookie 会话管理
+- **数据库**: SQLite + 异步 ORM
+- **任务队列**: RQ + Redis（3 个独立队列：research、podcast、audio）
+- **AI 能力**: 
+  - **LLM**: Trajectory Flow API（文本生成和推理）
+  - **搜索**: Tavily API（网络检索）
+  - **TTS**: SiliconFlow CosyVoice2（文本转语音）
+- **部署**: Docker / Docker Compose（支持 Windows/Linux）
+- **多 Agent**: AutoGen 框架（研究 Agent、评审 Agent、音频 Agent）
 
 ## 项目结构
 
